@@ -33,14 +33,41 @@ wild Pokemon actually ends up with, however they got there.
    every one of its own flee attempts to succeed while it's on, but never
    touches a manual RUN you press yourself.
 
+## HUD
+
+**SHOW HUD** (on by default, independent of AUTO HUNT) draws a small
+readout in the top-left corner: real wall-clock elapsed time (not game
+time -- unaffected by the GAME SPEED setting), total wild encounters, and
+a per-species count sorted highest first. It keeps counting through a
+pause (e.g. while AUTO HUNT is off so you can catch a shiny) and only
+resets when the game restarts or the mod reloads.
+
+## Battery
+
+An unattended hunt with the screen forced awake for hours is going to use
+power regardless. To cut it down:
+
+- Disable graphics-heavy mods you don't need while not watching (a 3D
+  voxel-style rendering mod is the biggest one) -- turn them back on when
+  you pick the phone up.
+- If you're running Wilds of Kanto, turn its **Show Wild Mons** setting
+  off but leave **Random Enc** on -- this mod only needs the classic
+  step-based roll, not the visible/animated sprites.
+- Lower your device's screen brightness; it matters more than anything
+  in-game.
+- Plug the phone in. KEEP SCREEN AWAKE has to stay on for this mod to run
+  at all, so charging isn't optional for a long session.
+
 ## Notes
 
 - Only triggers on wild encounters (`battle.kind == "wild"`); trainer and
   Safari battles are left alone.
-- If something else (an NPC, a menu) interrupts the shuffle, the mod caps
-  each held direction at under a second before giving up and flipping, so
-  it can't get stuck holding a button into an unrelated screen for long.
-  Pick a quiet spot away from trainers/NPCs for a cleaner run.
+- If an encounter (or a menu, or anything else) interrupts a step mid-hold,
+  the mod still credits that step and flips direction correctly once
+  things clear -- it doesn't repeat the same direction twice and drift off
+  the original two tiles.
+- If a held direction genuinely can't move at all (blocked by a wall),
+  it gives up and flips after under a second.
 - Compatible with Wilds of Kanto (its "Random Enc" setting keeps the
   classic step-based rolls this mod needs -- leave it on) and with any
   sprite-replacement mod (sprites are a separate layer from battle logic).
@@ -48,7 +75,8 @@ wild Pokemon actually ends up with, however they got there.
   mod alongside Wilds of Kanto: those two mods implement the same visible-
   overworld-Pokemon idea independently and can double-spawn on the same
   tiles. Not this mod's issue, but worth disabling one of them before a
-  long hunting session.
+  long hunting session -- also saves the battery it costs to run two of
+  them at once.
 
 ## Layout
 

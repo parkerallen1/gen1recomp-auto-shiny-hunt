@@ -3,6 +3,23 @@
 Format: [keep a changelog](https://keepachangelog.com/en/1.1.0/).
 Version headings match `manifest.json`'s `version`.
 
+## 0.3.0
+
+### Fixed
+
+- The walk-shuffle could repeat the same direction twice in a row when an
+  encounter interrupted a step mid-hold (the flip that step earned was
+  getting dropped), drifting the player off the original two tiles over
+  time. Pending steps are now confirmed even while blocked, so every
+  completed step reliably flips direction exactly once.
+
+### Added
+
+- `SHOW HUD` toggle (on by default, independent of `AUTO HUNT`): an
+  on-screen readout of real wall-clock elapsed time (not game time --
+  unaffected by GAME SPEED), total wild encounters, and a per-species
+  encounter count.
+
 ## 0.2.0
 
 ### Fixed
