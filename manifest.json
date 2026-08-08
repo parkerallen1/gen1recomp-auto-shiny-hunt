@@ -1,0 +1,19 @@
+{
+  "id": "auto_shiny_hunt",
+  "name": "Auto Shiny Hunt",
+  "version": "0.2.0",
+  "api": 2,
+  "entry": "main.lua",
+  "profile": "content",
+  "game_version": ">=0.0.0-dev <1.0.0",
+  "category": "MECHANIC",
+  "priority": 100,
+  "dependencies": [],
+  "optional_dependencies": [],
+  "conflicts": [],
+  "incompatible": [],
+  "experimental": false,
+  "description": "Auto-flees non-shiny wild encounters and shuffles in place to trigger them, so shiny hunting can run unattended.",
+  "github": "parkerallen1/gen1recomp-auto-shiny-hunt",
+  "license": "MIT"
+}
