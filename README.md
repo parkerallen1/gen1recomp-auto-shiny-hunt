@@ -26,6 +26,7 @@ wild Pokemon actually ends up with, however they got there.
      where you're standing (defaults to UP/DOWN).
    - Leave **KEEP SCREEN AWAKE** on so the app doesn't get paused by the
      device sleeping. Plug the phone in -- this runs indefinitely.
+   - **SPEED CAP** is 4X unless you pick a tighter one; see below.
 4. Leave the phone. Every wild battle either resolves itself in a second
    or two (non-shiny) or stops and sits there (shiny) until you pick the
    phone back up.
@@ -33,14 +34,47 @@ wild Pokemon actually ends up with, however they got there.
    every one of its own flee attempts to succeed while it's on, but never
    touches a manual RUN you press yourself.
 
+## Speed cap
+
+**SPEED CAP** holds GAME SPEED down while AUTO HUNT is on. It defaults to
+**4X**, which is also the highest it goes -- the option only offers
+*tighter* caps (3X, 2X, 1X), never a looser one. Past 4X an unattended hunt
+stops being the game running fast and turns into a counter being spun.
+
+Nothing is taken away: the GAME SPEED options row, the `1` hotkey and the
+shoulder buttons all still cycle, they just can't leave the value above the
+cap for longer than a tick. Turn AUTO HUNT off and the game is yours again
+at whatever speed you like -- and if you launched with `--speed` /
+`POKEPORT_SPEED`, that exact value is handed back untouched.
+
 ## HUD
 
-**SHOW HUD** (on by default, independent of AUTO HUNT) draws a small
-readout in the top-left corner: real wall-clock elapsed time (not game
-time -- unaffected by the GAME SPEED setting), total wild encounters, and
-a per-species count sorted highest first. It keeps counting through a
-pause (e.g. while AUTO HUNT is off so you can catch a shiny) and only
-resets when the game restarts or the mod reloads.
+**SHOW HUD** (on by default, independent of AUTO HUNT) draws real
+wall-clock elapsed time (not game time -- unaffected by the GAME SPEED
+setting), the total wild encounter count, and a per-species count sorted
+highest first. It keeps counting through a pause (e.g. while AUTO HUNT is
+off so you can catch a shiny) and only resets when the game restarts or the
+mod reloads.
+
+It comes in three sizes, and the chips it draws on itself switch between
+them with a tap (or a mouse click on desktop):
+
+| size | what it is |
+| --- | --- |
+| **mini** | a one-line pill: clock and total, out of the way |
+| **normal** | the corner panel -- clock, total, top species |
+| **full** | the HUD owns the screen; the game shrinks to a corner PiP |
+
+- `+` grows the HUD, `-` shrinks it. From the corner panel, `-` goes to the
+  pill and tapping the pill brings the panel back.
+- At full size the game is still live in the picture-in-picture corner --
+  a shiny battle is right there, pulsing border and all -- and tapping the
+  PiP is the quick way back to the full-size screen. The full size also
+  lists as many species as the window has room for, in columns.
+- Whatever the size, the clock is the biggest thing on it, the encounter
+  total is next, and the per-species breakdown is last.
+- Taps that miss the HUD go to the game as normal, and the on-screen
+  controls always get first refusal, so the HUD can never eat a d-pad press.
 
 ## Battery
 
@@ -68,6 +102,11 @@ power regardless. To cut it down:
   the original two tiles.
 - If a held direction genuinely can't move at all (blocked by a wall),
   it gives up and flips after under a second.
+- The full-size HUD composites the window itself (`render.compose`), so
+  whole-screen display effects -- GBC FX's LCD grid, a CRT-style post-process
+  pipeline -- are not drawn over the picture-in-picture while it's up. Shrink
+  the HUD back to the corner panel and they're there again; nothing about the
+  setting changes.
 - Compatible with Wilds of Kanto (its "Random Enc" setting keeps the
   classic step-based rolls this mod needs -- leave it on) and with any
   sprite-replacement mod (sprites are a separate layer from battle logic).

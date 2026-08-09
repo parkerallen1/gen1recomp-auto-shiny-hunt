@@ -3,6 +3,30 @@
 Format: [keep a changelog](https://keepachangelog.com/en/1.1.0/).
 Version headings match `manifest.json`'s `version`.
 
+## 0.4.0
+
+### Added
+
+- `SPEED CAP`: a hard ceiling on GAME SPEED while `AUTO HUNT` is on, 4X by
+  default and 4X at the most -- the option can only pick a tighter cap
+  (3X/2X/1X), never a looser one. The GAME SPEED row, the `1` hotkey and the
+  shoulder buttons all still work, they just cannot leave the value above the
+  cap. A `--speed` / `POKEPORT_SPEED` run argument is held down with it and
+  handed back untouched when hunting stops.
+- The HUD resizes: tap the `+` / `-` chips it draws for itself to go between
+  a one-line pill, the corner panel, and a full-screen readout that takes the
+  window over and shrinks the game into a picture-in-picture corner, so a
+  shiny battle stays on screen (and keeps its pulsing border) at every size.
+  Tapping the PiP itself is the quick way back to the full-size game.
+
+### Changed
+
+- The HUD now ranks what it shows at every size: the clock is the biggest
+  thing on it, the encounter total next, the per-species breakdown last. The
+  full-screen size fits as many species rows as the window has room for,
+  in columns, instead of the corner panel's eight.
+- Species with equal counts no longer swap places between frames.
+
 ## 0.3.0
 
 ### Fixed
