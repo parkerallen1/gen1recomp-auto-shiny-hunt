@@ -1,0 +1,143 @@
+name: Upstream watch
+
+# This mod deliberately depends on nobody: it reads the engine's own shiny DV
+# formula and the public hooks, and never requires another mod. What it cannot
+# do is notice on its own when one of those moves underneath it.
+#
+# So: once a week, compare compat/upstream.json's `verified` versions against
+# what each repo has actually released, and open (or refresh) a single issue
+# when they differ. The issue is the prompt to re-read the hooks in that file's
+# `watch` list, run ./tests/run.sh, and bump `verified`.
+#
+# Nothing here can change the mod -- it only reads and files an issue.
+
+on:
+  schedule:
+    # Mondays, 09:00 UTC
+    - cron: "0 9 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: upstream-watch
+  cancel-in-progress: false
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Compare released versions against compat/upstream.json
+        id: check
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          # Latest published release, falling back to the newest tag for a
+          # repo that tags but does not publish releases. Empty means neither,
+          # which is reported rather than treated as a change.
+          latest_of() {
+            repo="$1"
+            tag="$(gh api "repos/$repo/releases/latest" --jq .tag_name 2>/dev/null || true)"
+            if [ -z "$tag" ] || [ "$tag" = "null" ]; then
+              tag="$(gh api "repos/$repo/tags?per_page=1" --jq '.[0].name' 2>/dev/null || true)"
+            fi
+            [ "$tag" = "null" ] && tag=""
+            printf '%s' "$tag"
+          }
+
+          rows=""
+          moved=""
+          while IFS=$'\t' read -r repo role verified; do
+            [ -z "$repo" ] && continue
+            latest="$(latest_of "$repo")"
+            if [ -z "$latest" ]; then
+              mark="no release or tag found"
+            elif [ "$latest" = "$verified" ]; then
+              mark="unchanged"
+            else
+              mark="**moved**"
+              moved="${moved}- \`$repo\`: \`$verified\` → \`$latest\`"$'\n'
+            fi
+            rows="${rows}| \`$repo\` | $role | \`$verified\` | \`${latest:-?}\` | $mark |"$'\n'
+          done < <(jq -r '.upstream[] | [.repo, .role, .verified] | @tsv' compat/upstream.json)
+
+          {
+            echo "table<<TABLE_EOF"
+            echo "| repo | role | verified against | latest | |"
+            echo "| --- | --- | --- | --- | --- |"
+            printf '%s' "$rows"
+            echo "TABLE_EOF"
+            echo "moved<<MOVED_EOF"
+            printf '%s' "$moved"
+            echo "MOVED_EOF"
+          } >> "$GITHUB_OUTPUT"
+
+          if [ -n "$moved" ]; then
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Open or refresh the re-check issue
+        if: steps.check.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TITLE: "Upstream moved: re-check compatibility"
+          TABLE: ${{ steps.check.outputs.table }}
+          MOVED: ${{ steps.check.outputs.moved }}
+        run: |
+          set -euo pipefail
+
+          # built as a file rather than a shell string: the table and the
+          # version list are multi-line and would need quoting gymnastics
+          {
+            echo "One or more upstreams have released since this mod was last"
+            echo "read against them."
+            echo
+            echo "## Moved"
+            echo
+            printf '%s\n' "$MOVED"
+            echo
+            echo "## Current state"
+            echo
+            printf '%s\n' "$TABLE"
+            echo
+            echo "## What to do"
+            echo
+            echo "1. Skim each moved project's CHANGELOG since the verified version"
+            echo "   for the hooks this mod depends on:"
+            echo
+            jq -r '.watch[] | "   - `" + . + "`"' compat/upstream.json
+            echo
+            echo '2. Run `./tests/run.sh` (no LOVE needed).'
+            echo "3. If something behaves differently, fix it and add the case to"
+            echo '   `tests/auto_shiny_hunt_test.lua`.'
+            echo '4. Update `verified` in `compat/upstream.json` and the README table.'
+            echo
+            echo '_Filed automatically by `.github/workflows/upstream-watch.yml`._'
+          } > "$RUNNER_TEMP/issue-body.md"
+
+          existing="$(gh issue list --state open --limit 50 \
+            --json number,title \
+            --jq "map(select(.title == \"$TITLE\")) | .[0].number // empty")"
+
+          if [ -n "$existing" ]; then
+            gh issue edit "$existing" --body-file "$RUNNER_TEMP/issue-body.md"
+            echo "refreshed issue #$existing"
+          else
+            gh issue create --title "$TITLE" --body-file "$RUNNER_TEMP/issue-body.md"
+          fi
+
+      - name: Report when nothing moved
+        if: steps.check.outputs.changed != 'true'
+        run: |
+          echo "everything matches compat/upstream.json:"
+          echo "${{ steps.check.outputs.table }}"

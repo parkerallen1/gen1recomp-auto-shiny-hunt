@@ -117,14 +117,74 @@ power regardless. To cut it down:
   long hunting session -- also saves the battery it costs to run two of
   them at once.
 
+## Compatibility
+
+This mod depends on nobody. It reads the engine's own virtual-shiny DV
+formula and the public hooks, never `require`s another mod, and never reads
+another mod's state -- which is why a shiny from *any* source is detected
+with no setup. What it has actually been read against:
+
+| project | version | notes |
+| --- | --- | --- |
+| Gen1Recomp (engine) | v0.1.75 | `input.pointer` needs >= v0.1.69 -- that's the manifest floor |
+| Dramatic Shape Voxel Mod | v1.8.1 | no shared hooks; its shinies are detected (see below) |
+| Shiny Pokemon (masterwebx) | v1.0.8 | its shinies are detected; see the note on running both |
+| Wilds of Kanto | v1.11.1 | **leave RANDOM ENC on** (see below) |
+| Gen1 Modern UI | v0.8.3 | wraps the same three HUD hooks at priority 100 and defers correctly |
+
+`compat/upstream.json` is the machine-readable copy of that table;
+`.github/workflows/upstream-watch.yml` checks it weekly and opens an issue
+when one of them releases something new.
+
+### Shiny sources
+
+Since **Dramatic Shape v1.8.1** the voxel mod rolls its own shinies, and the
+standalone **Shiny Pokemon** mod has always done the same. Both write the
+verdict into the Pokemon's DVs, which is exactly what this mod reads -- so
+one, the other, both or neither all work here without a setting.
+
+Running **both** at once is the thing to avoid: they each wrap
+`Pokemon.new`, and Dramatic Shape's miss branch actively *un-shinies* a mon,
+so one mod can cancel the other's shiny and the real rate is neither dial.
+Pick one:
+
+- Turn **Shiny Pokemon** off, or
+- keep it for its overworld sprite colouring (Dramatic Shape's shiny art is
+  battle-side only) and set its **SHINY RATE** to **OFF**, which leaves it
+  reading DVs and colouring without rolling anything of its own.
+
+### Wilds of Kanto
+
+Leave its **RANDOM ENC** setting **on**. With it off, Wilds of Kanto returns
+`nil` from `encounter.roll` for grass, which switches the classic step-based
+roll off entirely -- and the classic roll is the only thing this mod's
+shuffle can trigger. The hunt would walk in place for hours and never find a
+single encounter.
+
+### Dramatic Shape camera rungs
+
+Hunt on the orbit/diorama rungs (or in 2D), not the **1ST**/**3RD** person
+ones. Those replace grid walking with continuous movement rotated by the
+camera's yaw, so a held UP is "forward from where you happen to be looking"
+rather than one tile north -- the shuffle can slide off its two tiles, and
+turning the camera changes what the walk directions mean mid-hunt.
+
 ## Layout
 
 - `manifest.json` - identity, version range, load order
 - `main.lua` - the entry chunk; receives the `mod` object
+- `tests/` - a stand-in engine and the mod's own checks (`./tests/run.sh`)
+- `compat/upstream.json` - what this mod has been verified against
 
 ## Dev loop
 
 1. `POKEPORT_DEV=1 love .` once, leave it running
 2. edit, press F5 to hot-reload, backtick for the dev console
-3. `python3 tools/modkit.py validate auto_shiny_hunt` before sharing
-4. `python3 tools/modkit.py pack mods/auto_shiny_hunt` to ship
+3. `./tests/run.sh` -- no LOVE needed; it stands in an engine and drives
+   every hook this mod installs
+4. `python3 tools/modkit.py validate auto_shiny_hunt` before sharing
+5. `python3 tools/modkit.py pack mods/auto_shiny_hunt` to ship
+
+Before a release, or when the watcher files an issue: skim each moved
+project's changelog for the hooks listed in `compat/upstream.json`, run the
+tests, then update that file and the table above.

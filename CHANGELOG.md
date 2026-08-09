@@ -3,6 +3,37 @@
 Format: [keep a changelog](https://keepachangelog.com/en/1.1.0/).
 Version headings match `manifest.json`'s `version`.
 
+## 0.4.1
+
+### Fixed
+
+- `game_version` was `>=0.0.0-dev <1.0.0`, so the mod would have refused to
+  load the day the engine shipped 1.0. It is now
+  `0.0.0-dev || >=0.1.69 <2.0.0`: 0.1.69 is where `input.pointer` landed
+  (it is absent in 0.1.68), and without it the HUD's tap chips cannot be
+  reached at all.
+
+### Added
+
+- `tests/` -- a stand-in engine (hook bus with the real priority/`next`
+  chaining, a recording `love.graphics`) and the mod's own checks, run with
+  `./tests/run.sh` and no LOVE install. Covers the speed cap, shiny
+  detection through both DVs and the `mon.shiny` cache, the walk shuffle's
+  interrupt handling, HUD layout at five window sizes, the tap targets, and
+  a peer mod wrapping the same three HUD hooks at a higher priority.
+- `compat/upstream.json` and a weekly `upstream-watch` workflow: it compares
+  the engine and the four peer mods against the versions this mod has been
+  read against, and opens a single issue when one of them releases.
+- A Compatibility section in the README: which versions were checked, why
+  Wilds of Kanto's RANDOM ENC has to stay on, why Dramatic Shape's
+  first/third-person camera rungs are the wrong place to hunt, and what to
+  do now that both Dramatic Shape 1.8.1 and the Shiny Pokemon mod roll
+  shinies.
+
+### Changed
+
+- The packed release `.zip` no longer carries `tests/` or `compat/`.
+
 ## 0.4.0
 
 ### Added

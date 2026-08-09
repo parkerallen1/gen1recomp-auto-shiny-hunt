@@ -139,8 +139,12 @@ jobs:
 
           git archive HEAD | tar -x -C "$staging"
 
+          # the archive is the mod and nothing else: the tests need a Lua
+          # interpreter the game does not expose, and compat/ is a note to
+          # maintainers, so neither belongs on a player's device
           rm -rf "$staging/.github" "$staging/.gitattributes" \
-                 "$staging/.gitignore" "$staging/.luarc.json"
+                 "$staging/.gitignore" "$staging/.luarc.json" \
+                 "$staging/tests" "$staging/compat"
 
           python3 - "$staging/manifest.json" "$VERSION" <<'PY'
           import json, sys

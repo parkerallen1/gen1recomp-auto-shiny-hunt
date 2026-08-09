@@ -1,11 +1,11 @@
 {
   "id": "auto_shiny_hunt",
   "name": "Auto Shiny Hunt",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "api": 2,
   "entry": "main.lua",
   "profile": "content",
-  "game_version": ">=0.0.0-dev <1.0.0",
+  "game_version": "0.0.0-dev || >=0.1.69 <2.0.0",
   "category": "MECHANIC",
   "priority": 100,
   "dependencies": [],

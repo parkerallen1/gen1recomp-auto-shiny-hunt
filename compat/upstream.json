@@ -1,0 +1,46 @@
+{
+  "note": "What this mod has actually been read against. .github/workflows/upstream-watch.yml diffs `verified` against each repo's latest release/tag and opens an issue when one moves. Update a `verified` only after re-checking the hooks listed in `watch`.",
+  "watch": [
+    "input.step",
+    "input.pointer",
+    "render.hud",
+    "render.compose",
+    "battle.started",
+    "battle.ended",
+    "battle.run",
+    "battle.overlay",
+    "encounter.roll"
+  ],
+  "upstream": [
+    {
+      "repo": "bryanthaboi/gen1recomp",
+      "role": "engine",
+      "verified": "v0.1.75",
+      "why": "every hook we wrap, plus GameSpeed.LEVELS and Stats.isShiny"
+    },
+    {
+      "repo": "DramaticShape/DramaticShapeVoxelMod",
+      "role": "peer",
+      "verified": "v1.8.1",
+      "why": "wraps Pokemon.new for its own shinies; owns the world pass"
+    },
+    {
+      "repo": "masterwebx/gen1recomp-shiny-pokemon",
+      "role": "peer",
+      "verified": "v1.0.8",
+      "why": "the other mod that writes shiny DVs"
+    },
+    {
+      "repo": "YoDrehDenSwagAuf/overworld-spawn-mod",
+      "role": "peer",
+      "verified": "v1.11.1",
+      "why": "suppresses classic encounter.roll unless RANDOM ENC is on"
+    },
+    {
+      "repo": "ArmstrongThomas/gen1-modern-ui",
+      "role": "peer",
+      "verified": "v0.8.3",
+      "why": "wraps render.compose / render.hud / input.pointer at priority 100"
+    }
+  ]
+}
