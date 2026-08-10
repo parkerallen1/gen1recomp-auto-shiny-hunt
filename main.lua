@@ -1,9 +1,10 @@
--- Auto Shiny Hunt: shuffles the player between two directions to keep
--- rolling classic step-based wild encounters, then reacts to whatever
--- shows up -- flees anything that isn't shiny, leaves a shiny battle
--- alone and flags it (vibrate + a pulsing border) so it's obvious on a
--- glance.  Turn AUTO HUNT on from OPTIONS -> MOD SETTINGS -> AUTO SHINY
--- HUNT before parking the phone in a patch of grass.
+-- Auto Shiny Hunt: keeps wild encounters coming -- shuffling the player
+-- between two directions to roll the classic step-based ones, or casting a
+-- rod at the water in front of them (HUNT MODE) -- then reacts to whatever
+-- shows up: flees anything that isn't shiny, leaves a shiny battle alone
+-- and flags it (vibrate + a pulsing border) so it's obvious on a glance.
+-- Turn AUTO HUNT on from OPTIONS -> MOD SETTINGS -> AUTO SHINY HUNT before
+-- parking the phone in a patch of grass, or on a shore facing the water.
 --
 -- "Shiny" is Gen 1's real virtual-shiny DV pattern (the one Red Gyarados
 -- uses): DEF/SPD/SPC DVs = 10 and ATK DV in the even-high set. This is
@@ -29,6 +30,29 @@ end
 
 local DIR_CHOICES = {
   { "UP", "up" }, { "DOWN", "down" }, { "LEFT", "left" }, { "RIGHT", "right" },
+}
+
+-- How the hunt triggers encounters.  WALK is the original shuffle; FISH
+-- casts a rod at the water the player is already facing, which is the only
+-- way to reach the water tables at all -- and, unlike the shuffle, does not
+-- depend on the classic step-based roll being switched on (see the Wilds of
+-- Kanto note in the README).
+local MODE_CHOICES = { { "WALK", "walk" }, { "FISH", "fish" } }
+
+-- Rod tiers, best first.  BEST OWNED walks this list and takes the first one
+-- actually in the bag, which is what a player reaches for: only the Super
+-- Rod pulls the map's own fishing group, the Good Rod is Goldeen/Poliwag
+-- everywhere, and the Old Rod is Magikarp everywhere -- but the Old Rod is
+-- also the only one that hooks on *every* cast, so a Magikarp hunt is
+-- genuinely faster with it and the choice is left to the player.
+local ROD_TIERS = { "SUPER_ROD", "GOOD_ROD", "OLD_ROD" }
+local ROD_CHOICES = {
+  { "BEST OWNED", "best" }, { "SUPER ROD", "SUPER_ROD" },
+  { "GOOD ROD", "GOOD_ROD" }, { "OLD ROD", "OLD_ROD" },
+}
+
+local FACING_STEP = {
+  up = { 0, -1 }, down = { 0, 1 }, left = { -1, 0 }, right = { 1, 0 },
 }
 
 -- GAME SPEED ceiling while hunting.  The engine's ladder
@@ -88,13 +112,22 @@ local GB_ASPECT = 160 / 144
 return function(mod)
   mod.options:define({
     { key = "enabled", type = "toggle", label = "AUTO HUNT", default = false,
-      help = "Flee non-shiny wild encounters and shuffle in place to "
-        .. "trigger them. Stand in grass (or wherever you want encounters) "
-        .. "with an open tile on each side of the chosen axis first." },
+      help = "Flee non-shiny wild encounters and trigger them over and over "
+        .. "-- by shuffling in place, or by fishing, whichever HUNT MODE "
+        .. "says. Get into position first (see HUNT MODE)." },
+    { key = "hunt_mode", type = "choice", label = "HUNT MODE", default = "walk",
+      choices = MODE_CHOICES,
+      help = "WALK shuffles between two directions in grass. FISH casts a "
+        .. "rod at the water you are already facing and never moves you -- "
+        .. "stand on the shore facing the water and pick a ROD." },
+    { key = "rod", type = "choice", label = "ROD", default = "best",
+      choices = ROD_CHOICES,
+      help = "Which rod FISH mode casts. BEST OWNED takes the highest tier "
+        .. "in your bag. A rod you do not own is never used." },
     { key = "dir_a", type = "choice", label = "WALK DIR A", default = "up",
       choices = DIR_CHOICES,
-      help = "The two directions to shuffle between. Pick whichever axis "
-        .. "is actually open where you're standing." },
+      help = "The two directions to shuffle between in WALK mode. Pick "
+        .. "whichever axis is actually open where you're standing." },
     { key = "dir_b", type = "choice", label = "WALK DIR B", default = "down",
       choices = DIR_CHOICES },
     { key = "keep_awake", type = "toggle", label = "KEEP SCREEN AWAKE", default = true,
@@ -161,6 +194,16 @@ return function(mod)
     -- FOCUS target species: lazily loaded from mod.save. nil = not loaded
     -- yet; an empty table means "any shiny", the pre-FOCUS behaviour
     targets = nil, speciesIndex = nil,
+    -- FISH mode.  `casting` is a cast of our own with its text boxes still
+    -- on screen (the only time this mod may mash A outside a flee);
+    -- `ready` is the fishing equivalent of the shuffle's held direction --
+    -- what tells the clock the hunt is actually running -- and `reason` is
+    -- the short HUD tag saying why it is not, when it is not.  `rows` is
+    -- the water map cached per map id (see waterAt).
+    fish = {
+      casting = false, ready = false, reason = nil, broken = false,
+      box = nil, awaitBox = false, rows = nil, rowsFor = nil,
+    },
     -- a fixed-length hunting session that covers the screen and holds back
     -- everything it finds until the countdown reaches zero
     focus = {
@@ -195,11 +238,29 @@ return function(mod)
     if isBlocking(ev.state) then
       state.blockingLayers = state.blockingLayers + 1
     end
+    -- A cast's own text boxes, claimed by identity rather than by depth.
+    -- TextBox pops itself *before* running the onDone that pushes its
+    -- successor, so a cast's ". . ." -> verdict chain passes back through
+    -- zero layers with no frame in between: a depth test cannot tell the
+    -- verdict box from a menu the player just opened, and mashing A into
+    -- the wrong one of those is the whole bug class this mod is careful
+    -- about.  awaitBox is armed by the cast and re-armed by each pop, and
+    -- disarmed by the first tick that finds nothing there (fishTick).
+    -- (spelled out rather than calling fishMode(), which is declared below
+    -- this listener -- and it keeps a mode switch mid-cast from leaving the
+    -- claim armed over a screen the walk shuffle will never look at)
+    if state.fish.awaitBox and isBlocking(ev.state)
+       and mod.options:get("hunt_mode") == "fish" then
+      state.fish.box, state.fish.awaitBox = ev.state, false
+    end
   end)
 
   mod.events:on("screen.popped", function(ev)
     if isBlocking(ev.state) then
       state.blockingLayers = math.max(0, state.blockingLayers - 1)
+    end
+    if state.fish.box ~= nil and ev.state == state.fish.box then
+      state.fish.box, state.fish.awaitBox = nil, true
     end
     -- A battle is always at least one layer over the overworld, so back at
     -- zero there cannot be one on screen.  Belt and braces for the clock: if
@@ -212,6 +273,174 @@ return function(mod)
     local ok, def = pcall(function() return mod.content.pokemon:get(species) end)
     if ok and def and def.name then return def.name end
     return tostring(species or "?")
+  end
+
+  -- -------------------------------------------------------------- FISH --
+  -- The other way to keep wild encounters coming: cast a rod at the water
+  -- the player is already facing, mash through the engine's own ". . ." and
+  -- verdict boxes, and let the battle handlers above take it from there.  A
+  -- hooked encounter arrives as an ordinary `kind == "wild"` battle, so
+  -- every shiny, flee, count, target and FOCUS rule in this file applies to
+  -- it with nothing added.
+  --
+  -- Nothing here moves the player: FISH mode ignores WALK DIR A/B entirely,
+  -- and the facing that decides where the line goes is whatever the player
+  -- left the character standing in.
+
+  local function fishMode()
+    return mod.options:get("hunt_mode") == "fish"
+  end
+
+  -- AUTO HUNT off is also the reset button: it clears the two things that
+  -- latch (a cast that threw, and a map whose water could not be read), so
+  -- switching the hunt off and on again is the one remedy for both.
+  local function resetFish()
+    local f = state.fish
+    f.casting, f.ready, f.reason, f.broken = false, false, nil, false
+    f.box, f.awaitBox = nil, false
+    f.rows, f.rowsFor = nil, nil
+  end
+
+  -- The water map, cached per map id.  mod.world:mapOverview() marks a water
+  -- cell "~" using the very Map:isWaterCell the bag's own rod check calls,
+  -- so this test and the game's agree by construction rather than by a
+  -- second copy of the tile table living here.  It walks the whole grid, so
+  -- it is read once per map and dropped when the map changes underneath
+  -- (see the listeners below).  A cell that is both water and a warp reads
+  -- as the warp and is left alone -- fishing off a warp tile is not a thing
+  -- worth reaching into the map for.
+  local function waterAt(mapId, x, y)
+    if not (mapId and x and y) then return false end
+    if state.fish.rowsFor ~= mapId then
+      local ok, view = pcall(function() return mod.world:mapOverview() end)
+      -- cache the failure too, so a map this cannot read is not re-walked
+      -- every single tick
+      state.fish.rows = (ok and view and view.rows and view.mapId == mapId)
+        and view.rows or false
+      state.fish.rowsFor = mapId
+    end
+    local rows = state.fish.rows
+    if not rows then return false end
+    local row = rows[y + 1]
+    return row ~= nil and row:sub(x + 1, x + 1) == "~"
+  end
+
+  -- keyed by map id already, so these are the ways a map can change while
+  -- the cache is still sitting on the right id
+  for _, name in ipairs({ "map.reloaded", "world.block_replaced" }) do
+    mod.events:on(name, function()
+      state.fish.rows, state.fish.rowsFor = nil, nil
+    end)
+  end
+
+  local function rodInBag(game, id)
+    local inv = game and game.save and game.save.inventory
+    return (tonumber(inv and inv[id]) or 0) > 0
+  end
+
+  local function chosenRod(game)
+    local pick = mod.options:get("rod")
+    if pick and pick ~= "best" then
+      return rodInBag(game, pick) and pick or nil
+    end
+    for _, id in ipairs(ROD_TIERS) do
+      if rodInBag(game, id) then return id end
+    end
+    return nil
+  end
+
+  -- The one place in this file that reaches past the supported facade.
+  -- There is no public entry point for a rod: the engine's own one is
+  -- BagMenu checking the water and calling OverworldState:goFishing, and
+  -- encounter.fishing only lets a mod redress a cast somebody else already
+  -- started.  So this asks mod.world for the live state, checks the two
+  -- things the bag checks before it casts, and then calls the same method
+  -- the bag does -- which keeps the rod tables, the bite odds, the "Not
+  -- even a nibble!" branch, the hooked-battle intro and any peer mod's
+  -- encounter.fishing wrapper all exactly where they are.  If the method is
+  -- not there, FISH mode says so on the HUD and casts nothing; it does not
+  -- fall back to inventing an encounter of its own.
+  --
+  -- Returns the state to cast from, or nil and a status: "busy" means the
+  -- hunt is running and simply has nothing to do this tick, a string in
+  -- capitals is a HUD tag, and nil is the ordinary idle (no overworld).
+  local function castableWorld()
+    local ok, ow = pcall(function() return mod.world:overworld() end)
+    if not ok or not ow then return nil, nil end
+    if type(ow.goFishing) ~= "function" then return nil, "NO FISHING" end
+    -- every ItemUseXRod does `jp c, ItemUseNotTime` on the surfing check
+    -- (item_effects.asm FishingInit): a rod is refused outright on the water
+    if ow.player and ow.player.surfing then return nil, "SURFING" end
+    -- the rod pose holds for a few frames after a verdict box closes;
+    -- casting into it would clear our own cast's sprite mid-cast
+    if ow.fishing or ow.fishPose then return nil, "busy" end
+    return ow, nil
+  end
+
+  -- One turn of the fishing cycle.  Unlike the shuffle there is nothing to
+  -- hold down: a cast is a single call, and the rest of the cycle is
+  -- advancing the boxes it puts up until either the overworld comes back
+  -- (cast again) or a battle opens (the handlers above own it).
+  local function fishTick(game)
+    local f = state.fish
+    if state.inBattle then
+      -- the bite landed; battle.started has it from here
+      f.casting, f.ready, f.reason = false, true, nil
+      return
+    end
+    if f.casting then
+      if f.box ~= nil then
+        -- our own ". . ." or verdict box: one fresh edge per tick, the same
+        -- mashing the flee path does and for the same reason
+        mod.input:tap(game, "a")
+        f.ready, f.reason = true, nil
+        return
+      end
+      -- nothing of ours left on screen: that cast is spent
+      f.casting, f.awaitBox = false, false
+    end
+    if state.blockingLayers > 0 then
+      -- somebody else's screen -- a menu, a dialog. Not ours to press into.
+      f.ready, f.reason = false, nil
+      return
+    end
+    if f.broken then
+      f.ready, f.reason = false, "CAN'T FISH"
+      return
+    end
+
+    local cur = mod.world:current()
+    if not cur then
+      -- title screen, a load, anywhere with no overworld under it
+      f.ready, f.reason = false, nil
+      return
+    end
+    local rod = chosenRod(game)
+    if not rod then
+      f.ready, f.reason = false, "NO ROD"
+      return
+    end
+    local ow, status = castableWorld()
+    if not ow then
+      f.ready = status == "busy"
+      f.reason = (status ~= "busy") and status or nil
+      return
+    end
+    -- current() reads its x/y/facing off a player that may not be there
+    -- yet mid-warp, so all three are checked before any of them is used
+    local step = cur.x and cur.y and FACING_STEP[cur.facing or ""]
+    if not (step and waterAt(cur.mapId, cur.x + step[1], cur.y + step[2])) then
+      f.ready, f.reason = false, "FACE WATER"
+      return
+    end
+
+    f.ready, f.reason = true, nil
+    f.casting, f.awaitBox = true, true
+    if not pcall(function() ow:goFishing(rod) end) then
+      -- an engine that threw on a cast will throw on the next one too, so
+      -- stop rather than spin. Turning AUTO HUNT off and on again clears it.
+      f.casting, f.awaitBox, f.broken = false, false, true
+    end
   end
 
   -- ------------------------------------------------------- FOCUS targets --
@@ -271,6 +500,11 @@ return function(mod)
     state.battleRef = ev.battle
     state.battleKind = ev.kind
     state.shinyUp = false
+    -- A hooked battle ends the cast that reeled it in. This fires from
+    -- BattleState:enter, i.e. from inside the very stack push a bite makes,
+    -- so it lands before screen.pushed could hand the battle to the cast as
+    -- if it were another one of its text boxes.
+    state.fish.casting, state.fish.box, state.fish.awaitBox = false, nil, false
     local species
     if ev.kind == "wild" then
       species = ev.battle and ev.battle.enemy and ev.battle.enemy.mon
@@ -644,10 +878,15 @@ return function(mod)
   -- The tag doubles as the answer to "why isn't the clock moving?": IDLE is
   -- AUTO HUNT on but the hunt not running -- a menu is up, the game is
   -- loading, or it cannot walk -- which is exactly when the clock parks.
+  -- FISH mode has more ways to be stopped than the shuffle does and they are
+  -- all fixable from where the player is standing, so it names the one that
+  -- applies (FACE WATER, NO ROD, SURFING) instead of a bare IDLE.
   local function statusText()
     if state.shinyUp then return "SHINY!" end
     if not mod.options:get("enabled") then return "HUNT PAUSED" end
-    return state.wasRunning and "HUNT ON" or "HUNT IDLE"
+    if state.wasRunning then return fishMode() and "FISHING" or "HUNT ON" end
+    if fishMode() and state.fish.reason then return state.fish.reason end
+    return "HUNT IDLE"
   end
 
   -- Where the game sits once the HUD owns the window.  Pure geometry off the
@@ -875,6 +1114,10 @@ return function(mod)
     local lines = { ("FOCUS: %d MIN"):format(focusMinutes()), targetsSummaryText() }
     if not mod.options:get("enabled") then
       lines[#lines + 1] = "AUTO HUNT IS OFF -- NOTHING WILL BE HUNTED"
+    elseif fishMode() and state.fish.reason then
+      -- the offer is the last screen before the cover goes up, so a rod
+      -- that cannot cast is worth saying here rather than 25 minutes later
+      lines[#lines + 1] = ("CAN'T CAST: %s"):format(state.fish.reason)
     end
 
     local lineH = (lineFont and lineFont:getHeight() or 14) + 4
@@ -1252,9 +1495,19 @@ return function(mod)
   --     rather than merely unblocked -- which is what keeps a boot straight
   --     into a hunting save from counting its loading screen, whatever the
   --     screen stack happened to look like before this mod was listening.
+  --   * in FISH mode the equivalent of "genuinely walking" is a cast this
+  --     mod can actually make, and the text boxes a cast puts up are part of
+  --     it -- they are the hunt's own screen, not a menu interrupting it, so
+  --     they count where an identical-looking dialog over the shuffle does
+  --     not.
   local function huntIsRunning(hunting)
     if not hunting then return false end
     if state.inBattle then return true end
+    if fishMode() then
+      if state.fish.casting then return true end
+      if state.blockingLayers > 0 then return false end
+      return state.fish.ready
+    end
     if state.blockingLayers > 0 then return false end
     return state.token ~= nil or state.awaitingConfirm
   end
@@ -1266,6 +1519,17 @@ return function(mod)
 
     local hunting = mod.options:get("enabled")
     applySpeedCap(game, hunting)
+
+    -- Hoisted above every early return below.  A hunt that is mid battle,
+    -- mid cast or waiting on a text box is still a hunt, and the app pauses
+    -- the moment the device sleeps -- FISH mode in particular spends most of
+    -- its cycle behind a text box, which used to sit on the blocked side of
+    -- the return this once lived under. (A FOCUS session holds the screen
+    -- awake unconditionally; see focusTick.)
+    if hunting and mod.options:get("keep_awake") and love.window
+       and love.window.setDisplaySleepEnabled then
+      love.window.setDisplaySleepEnabled(false)
+    end
 
     local running = huntIsRunning(hunting)
     if running and not state.wasRunning then
@@ -1284,6 +1548,17 @@ return function(mod)
       -- one fresh wasPressed edge per tick -- mashing, not holding, since
       -- each text box needs its own edge to advance
       mod.input:tap(game, "a")
+    end
+
+    -- FISH mode owns the whole cycle from here: nothing below this belongs
+    -- to it. Dropping the shuffle's hold and its owed step confirmation
+    -- first is what stops a mode switch mid-hunt leaving a button down or a
+    -- direction flip pending for whenever WALK comes back.
+    if fishMode() then
+      stopWalking()
+      state.awaitingConfirm = false
+      if hunting then fishTick(game) else resetFish() end
+      return next(game, dt)
     end
 
     local blocked = state.blockingLayers > 0
@@ -1316,11 +1591,6 @@ return function(mod)
     if not hunting or blocked or state.awaitingConfirm then
       if state.token then mod.input:release(state.token); state.token = nil end
       return next(game, dt)
-    end
-
-    if mod.options:get("keep_awake") and love.window
-       and love.window.setDisplaySleepEnabled then
-      love.window.setDisplaySleepEnabled(false)
     end
 
     local cur = mod.world:current()

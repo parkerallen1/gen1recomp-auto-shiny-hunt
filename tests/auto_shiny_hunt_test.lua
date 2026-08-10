@@ -578,6 +578,291 @@ do
   t.emit("battle.ended", {})
 end
 
+-- --------------------------------------------------------------- fish --
+
+-- A cast is: check the water in front of the player, call the engine's own
+-- goFishing, then mash A through the ". . ." and verdict boxes it puts up.
+-- These drive that cycle the way the engine delivers it -- the boxes arrive
+-- as screen.pushed, the bite arrives as an ordinary wild battle.
+local function fishing(bag)
+  local t = H.load()
+  t.options.enabled = true
+  t.options.hunt_mode = "fish"
+  t.cell = { mapId = "ROUTE_1", x = 2, y = 1, facing = "up" }
+  return t, H.game(1, nil, bag or { OLD_ROD = 1 })
+end
+
+-- End the cast's ". . ." box the way the engine does: pop it, then push the
+-- verdict box from its onDone -- which the engine runs *after* the pop, so
+-- the pair passes back through zero layers inside one frame with no tick in
+-- between. Returns the verdict box for the caller to pop in turn.
+local function verdictBox(t)
+  t.popScreen(t.box)
+  t.box = t.pushScreen()
+  return t.box
+end
+
+-- The whole no-bite cycle for the cast that is currently out: the verdict
+-- box replaces the dots box, one tick mashes through it, and popping it puts
+-- the overworld back with nothing of ours on screen.
+local function finishCast(t, step)
+  local verdict = verdictBox(t)
+  step()
+  t.popScreen(verdict)
+end
+
+section("fishing casts")
+do
+  local t, g = fishing()
+
+  t.step(g)
+  ok(#t.casts == 1, "facing water with a rod in the bag casts")
+  ok(t.casts[1] == "OLD_ROD", "the rod it casts is the one in the bag")
+  ok(t.holds == 0, "fishing never holds a direction")
+
+  -- the cast's own text boxes: advanced, and not a reason to cast again
+  local taps = #t.taps
+  t.step(g)
+  ok(#t.taps > taps, "the cast's text boxes get an A press each tick")
+  ok(#t.casts == 1, "no second cast while the first is still on screen")
+
+  -- the verdict box, pushed from the dots box's onDone with no frame
+  -- between the pop and the push. The chain has to survive that.
+  local verdict = verdictBox(t)
+  taps = #t.taps
+  t.step(g)
+  ok(#t.taps > taps, "the verdict box pushed from the dots box is still ours")
+  ok(#t.casts == 1, "and still not a second cast")
+
+  t.popScreen(verdict)
+  t.step(g)
+  ok(#t.casts == 2, "a spent cast is followed by the next one")
+
+  -- a bite is an ordinary wild battle, so everything else in this file
+  -- applies to it untouched -- including the flee. battle.started arrives
+  -- from inside the push (BattleState:enter), before its screen.pushed.
+  verdictBox(t)
+  t.popScreen(t.box)
+  t.emit("battle.started", H.wildEvent(H.COMMON_DVS, 129))
+  local battle = t.pushScreen()
+  local casts = #t.casts
+  local before = #t.taps
+  t.step(g)
+  ok(#t.casts == casts, "a hooked battle is not fished on top of")
+  ok(t.state.fleeing, "a hooked common is fled like any other")
+  ok(t.state.totalEncounters == 1, "a hooked encounter is counted")
+  ok(#t.taps == before + 1, "the battle gets the flee's A press and no other")
+  t.emit("battle.ended", {})
+  t.popScreen(battle)
+
+  -- a hooked shiny is held exactly like a walked-into one
+  t.step(g)
+  verdictBox(t)
+  t.popScreen(t.box)
+  t.emit("battle.started", H.wildEvent(H.SHINY_DVS, 129))
+  battle = t.pushScreen()
+  ok(t.state.shinyUp and not t.state.fleeing, "a hooked shiny is left on screen")
+  before = #t.taps
+  t.step(g); t.step(g)
+  ok(#t.taps == before, "and nothing presses A at it")
+  t.emit("battle.ended", {})
+  t.popScreen(battle)
+
+  -- A cast spends most of its cycle behind a text box, which is the blocked
+  -- side of where the keep-awake apply used to sit -- and the app pauses the
+  -- moment the device sleeps, which would end the hunt outright.
+  local original = love.window.setDisplaySleepEnabled
+  local calls = 0
+  love.window.setDisplaySleepEnabled = function(v) if v == false then calls = calls + 1 end end
+  t.step(g)
+  calls = 0
+  t.step(g)
+  ok(calls >= 1, "the screen is held awake while a cast's text box is up")
+  love.window.setDisplaySleepEnabled = original
+end
+
+section("fishing refuses what the bag would refuse")
+do
+  -- facing away from the water. The player never moves in this mode, so
+  -- this is a standing mistake the HUD has to name rather than work around.
+  local t, g = fishing()
+  t.cell = { mapId = "ROUTE_1", x = 2, y = 1, facing = "down" }
+  t.step(g)
+  ok(#t.casts == 0, "facing away from the water casts nothing")
+  ok(t.state.fish.reason == "FACE WATER", "and says so (got "
+     .. tostring(t.state.fish.reason) .. ")")
+  t.cell = { mapId = "ROUTE_1", x = 2, y = 1, facing = "up" }
+  t.step(g)
+  ok(#t.casts == 1, "turning back to the water resumes casting")
+
+  -- no rod: this mod automates fishing, it does not hand out tackle
+  t, g = fishing({})
+  t.step(g)
+  ok(#t.casts == 0, "with no rod in the bag it casts nothing")
+  ok(t.state.fish.reason == "NO ROD", "and says so (got "
+     .. tostring(t.state.fish.reason) .. ")")
+
+  -- an explicitly chosen rod that is not owned is not silently swapped
+  t, g = fishing({ OLD_ROD = 1 })
+  t.options.rod = "SUPER_ROD"
+  t.step(g)
+  ok(#t.casts == 0, "a chosen rod that isn't owned falls back to nothing")
+
+  -- BEST OWNED takes the highest tier actually in the bag
+  t, g = fishing({ OLD_ROD = 1, GOOD_ROD = 1, SUPER_ROD = 1 })
+  t.step(g)
+  ok(t.casts[1] == "SUPER_ROD", "BEST OWNED takes the top tier (got "
+     .. tostring(t.casts[1]) .. ")")
+  t, g = fishing({ OLD_ROD = 1, GOOD_ROD = 1 })
+  t.step(g)
+  ok(t.casts[1] == "GOOD_ROD", "and the next one down when that is the top")
+
+  -- item_effects.asm refuses every rod while surfing; so does this
+  t, g = fishing()
+  t.ow.player.surfing = true
+  t.step(g)
+  ok(#t.casts == 0, "a rod is not cast while surfing")
+  ok(t.state.fish.reason == "SURFING", "and says so (got "
+     .. tostring(t.state.fish.reason) .. ")")
+
+  -- somebody else's menu over the overworld is not ours to press into
+  t, g = fishing()
+  local menu = t.pushScreen({ isOverworld = false })
+  local taps = #t.taps
+  t.step(g)
+  ok(#t.casts == 0 and #t.taps == taps,
+     "a menu over the overworld gets neither a cast nor an A press")
+  t.popScreen(menu)
+
+  -- and one opened after a cast's own boxes are gone is not mistaken for
+  -- another of them: this is the same mash-into-the-player's-menu bug the
+  -- walk shuffle guards against, and depth alone cannot tell them apart.
+  -- (A tick always falls between the two -- input.step runs at the top of
+  -- every logic step, and a screen can only be pushed from the update below
+  -- it -- so turning away from the water is what stops the next cast from
+  -- taking that tick.)
+  t, g = fishing()
+  t.step(g)
+  finishCast(t, function() t.step(g) end)
+  t.cell = { mapId = "ROUTE_1", x = 2, y = 1, facing = "down" }
+  t.step(g)
+  menu = t.pushScreen({ isOverworld = false })
+  taps = #t.taps
+  t.step(g); t.step(g)
+  ok(#t.taps == taps, "a menu opened after the cast ended gets no A press")
+  ok(#t.casts == 1, "and no cast is made behind it")
+  t.popScreen(menu)
+
+  -- an engine with no goFishing is told about, not worked around
+  t, g = fishing()
+  t.ow.goFishing = nil
+  t.step(g)
+  ok(#t.casts == 0 and t.state.fish.reason == "NO FISHING",
+     "an engine that cannot fish is reported, not faked")
+
+  -- and one that throws is stopped rather than retried every tick
+  t, g = fishing()
+  t.ow.goFishing = function() error("boom", 0) end
+  t.step(g); t.step(g); t.step(g)
+  ok(t.state.fish.reason == "CAN'T FISH", "a cast that throws stops the loop")
+  t.options.enabled = false
+  t.step(g)
+  t.options.enabled = true
+  t.ow.goFishing = function(_, rod) t.casts[#t.casts + 1] = rod end
+  t.step(g)
+  ok(#t.casts == 1, "turning AUTO HUNT off and on again clears it")
+end
+
+section("fishing and the clock")
+do
+  local t, g = fishing()
+  local function elapsed()
+    return t.state.elapsedBase
+      + (t.state.resumedAt and (rec.clock - t.state.resumedAt) or 0)
+  end
+  local function tick(seconds)
+    rec.clock = rec.clock + (seconds or 1)
+    t.step(g)
+  end
+
+  local function faceWater() t.cell = { mapId = "ROUTE_1", x = 2, y = 1, facing = "up" } end
+  local function faceLand() t.cell = { mapId = "ROUTE_1", x = 2, y = 1, facing = "down" } end
+
+  rec.clock = 2000
+  t.state.elapsedBase, t.state.resumedAt = 0, nil
+  -- facing dry land: this is the fishing equivalent of nowhere to walk
+  faceLand()
+  tick(1); tick(60)
+  ok(elapsed() == 0, "a rod that cannot cast does not run the clock")
+
+  faceWater()
+  tick(1); tick(1)
+  local casting = elapsed()
+  tick(20)
+  ok(elapsed() >= casting + 20, "casting runs the clock")
+
+  -- the cast's own boxes are the hunt's screen, not a menu interrupting it
+  local waiting = elapsed()
+  tick(10)
+  ok(elapsed() >= waiting + 10, "the clock runs through the cast's text boxes")
+
+  -- ... where a menu the mod did not put up still parks it, water in front
+  -- of the rod or not
+  finishCast(t, function() tick(1) end)
+  faceLand()
+  tick(1)
+  local menu = t.pushScreen({ isOverworld = false })
+  faceWater()
+  tick(1)
+  local casts, parked = #t.casts, elapsed()
+  tick(600)
+  ok(elapsed() == parked, "ten minutes in a menu still do not reach the clock")
+  ok(#t.casts == casts, "and nothing is cast from behind it")
+  t.popScreen(menu)
+
+  -- the HUD names the state either way
+  t.state.hudMode = "normal"
+  local function tag()
+    rec.reset()
+    t.hud(H.viewport(800, 600))
+    for _, p in ipairs(rec.prints) do
+      if p.text:match("^FISH") or p.text:match("^HUNT")
+         or p.text:match("^FACE") or p.text:match("^NO ") then return p.text end
+    end
+  end
+  tick(1); tick(1)
+  ok(tag() == "FISHING", "a running rod reads as FISHING (got " .. tostring(tag()) .. ")")
+  finishCast(t, function() tick(1) end)
+  faceLand()
+  tick(1); tick(1)
+  ok(tag() == "FACE WATER", "a stopped one names why (got " .. tostring(tag()) .. ")")
+end
+
+section("fishing leaves the walk alone")
+do
+  -- the default mode is still the shuffle, and switching to the rod has to
+  -- hand back whatever the shuffle was holding
+  local t = H.load()
+  t.options.enabled = true
+  local g = H.game(1, nil, { SUPER_ROD = 1 })
+  t.cell = { mapId = "ROUTE_1", x = 2, y = 1, facing = "up" }
+  t.step(g)
+  ok(t.holds == 1 and #t.casts == 0, "WALK is still the default and still walks")
+
+  t.options.hunt_mode = "fish"
+  t.step(g)
+  ok(t.holds == 0, "switching to FISH releases the held direction")
+  ok(not t.state.awaitingConfirm, "and drops the step confirmation it was owed")
+  ok(#t.casts == 1, "and casts instead")
+
+  -- back to the shuffle once that cast is off the screen
+  finishCast(t, function() t.step(g) end)
+  t.options.hunt_mode = "walk"
+  t.step(g); t.step(g)
+  ok(t.holds == 1, "switching back walks again")
+  ok(#t.casts == 1, "and casts nothing more")
+end
+
 -- ------------------------------------------------------------- FOCUS --
 
 section("FOCUS timer options")

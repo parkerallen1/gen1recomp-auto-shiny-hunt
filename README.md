@@ -1,9 +1,10 @@
 # Auto Shiny Hunt
 
-Unattended shiny hunting. When AUTO HUNT is on, this mod shuffles the
-player between two directions to keep triggering classic step-based wild
-encounters, flees anything that isn't shiny, and leaves a shiny battle on
-screen (with a vibrate + pulsing border) so it's obvious at a glance.
+Unattended shiny hunting. When AUTO HUNT is on, this mod keeps wild
+encounters coming -- by shuffling the player between two directions in
+grass, or by casting a rod at the water in front of them -- flees anything
+that isn't shiny, and leaves a shiny battle on screen (with a vibrate +
+pulsing border) so it's obvious at a glance.
 
 "Shiny" is Gen 1's real virtual-shiny DV pattern (the one that makes the
 one special Red Gyarados possible): DEF/SPD/SPC DVs = 10 and ATK DV in
@@ -17,13 +18,19 @@ wild Pokemon actually ends up with, however they got there.
 
 1. Install this mod (see the in-game mod importer for how to load a mod
    `.zip` on your device -- no rebuild needed).
-2. Walk your character to a spot with an open tile on two opposite sides
-   (e.g. grass to the north, a path tile to the south). Face either
-   direction.
+2. Get into position for the **HUNT MODE** you want:
+   - **WALK** -- stand somewhere with an open tile on two opposite sides
+     (e.g. grass to the north, a path tile to the south), facing either
+     direction.
+   - **FISH** -- stand on the shore *facing the water*, with a rod in your
+     bag. Nothing moves you in this mode, so where you leave the character
+     standing is where it fishes.
 3. OPTIONS -> MOD SETTINGS -> AUTO SHINY HUNT:
    - Turn on **AUTO HUNT**.
-   - Set **WALK DIR A** / **WALK DIR B** to the axis that's actually open
-     where you're standing (defaults to UP/DOWN).
+   - Set **HUNT MODE** (defaults to WALK).
+   - WALK only: set **WALK DIR A** / **WALK DIR B** to the axis that's
+     actually open where you're standing (defaults to UP/DOWN).
+   - FISH only: set **ROD** (defaults to BEST OWNED); see below.
    - Leave **KEEP SCREEN AWAKE** on so the app doesn't get paused by the
      device sleeping. Plug the phone in -- this runs indefinitely.
    - **SPEED CAP** is 10X unless you pick a tighter one; see below.
@@ -33,6 +40,42 @@ wild Pokemon actually ends up with, however they got there.
 5. Turn AUTO HUNT off before you want to play normally again -- it forces
    every one of its own flee attempts to succeed while it's on, but never
    touches a manual RUN you press yourself.
+
+## Fishing
+
+**HUNT MODE = FISH** casts a rod at the water tile the player is facing,
+mashes through the `. . .` and `Not even a nibble!` / `Oh! It's a bite!`
+boxes, and casts again -- indefinitely. A bite is an ordinary wild battle,
+so everything else in this mod applies to it unchanged: the shiny check,
+the auto-flee, the encounter counts, FOCUS targets, the lot.
+
+It refuses exactly what the bag refuses:
+
+| the HUD says | what to do |
+| --- | --- |
+| `FACE WATER` | you're facing land -- turn to the water |
+| `NO ROD` | the rod you picked isn't in your bag |
+| `SURFING` | rods don't work on the water; get back on land |
+
+**ROD** picks which one to cast. **BEST OWNED** (the default) takes the
+highest tier you actually have; a rod you don't own is never used, and the
+mod never hands you one.
+
+| rod | what it hooks | bite odds per cast |
+| --- | --- | --- |
+| **OLD ROD** | L5 Magikarp, everywhere | every cast |
+| **GOOD ROD** | L10 Goldeen / Poliwag, everywhere | 1/3 |
+| **SUPER ROD** | the map's own fishing group | up to 1/2 |
+
+Those are the engine's numbers, not this mod's -- it calls the same code the
+bag does, so the tables and the odds are wherever they already were. Worth
+knowing which one you want: the Old Rod is the *fastest* hunt in encounters
+per minute (it hooks every single cast) but it is Magikarp and only
+Magikarp, while the Super Rod is the only way to reach anything else.
+
+Fishing does not use the classic step-based encounter roll at all, so unlike
+the WALK shuffle it still works on a setup where that roll is switched off
+-- including Wilds of Kanto with **RANDOM ENC** off (see Compatibility).
 
 ## Speed cap
 
@@ -69,8 +112,14 @@ for the things that aren't hunting at all:
   else the shuffle can't walk (tag reads `HUNT IDLE`)
 
 A menu opened *inside* a battle -- the party screen, the bag -- doesn't park
-it; that's still the battle. The tag next to the clock always says which
-state it's in, so a clock that isn't moving explains itself.
+it; that's still the battle. In FISH mode a cast's own `. . .` and verdict
+boxes don't park it either, for the same reason: they're the hunt's screen,
+not something interrupting it. A menu this mod didn't put up still does.
+
+The tag next to the clock always says which state it's in, so a clock that
+isn't moving explains itself -- and in FISH mode it names the specific
+reason (`FACE WATER`, `NO ROD`, `SURFING`) rather than a bare `HUNT IDLE`,
+since each of those is fixable from where you're standing.
 
 It comes in three sizes, and the chips it draws on itself switch between
 them with a tap (or a mouse click on desktop):
@@ -161,7 +210,20 @@ power regardless. To cut it down:
 ## Notes
 
 - Only triggers on wild encounters (`battle.kind == "wild"`); trainer and
-  Safari battles are left alone.
+  Safari battles are left alone. That includes fishing inside the Safari
+  Zone, which the engine turns into a Safari battle -- the rod still casts,
+  but the mod won't flee it, so the hunt stops there until you deal with it.
+  Hunt somewhere else.
+- Fishing is the one part of this mod that reaches past the engine's
+  supported mod API. There is no public entry point for a rod (`mod.world`
+  has none, and `encounter.fishing` only lets a mod redress a cast somebody
+  else started), so it calls `OverworldState:goFishing` -- the same method
+  the bag's own USE calls, after checking the same two things the bag checks
+  first. That keeps the rod tables, the bite odds and the hooked-battle
+  intro exactly where they already were, but it is an internal method: if a
+  future engine moves it, FISH mode says `CAN'T FISH` on the HUD and casts
+  nothing rather than inventing an encounter of its own. WALK mode is
+  unaffected either way.
 - If an encounter (or a menu, or anything else) interrupts a step mid-hold,
   the mod still credits that step and flips direction correctly once
   things clear -- it doesn't repeat the same direction twice and drift off
@@ -204,7 +266,9 @@ power regardless. To cut it down:
 This mod depends on nobody. It reads the engine's own virtual-shiny DV
 formula and the public hooks, never `require`s another mod, and never reads
 another mod's state -- which is why a shiny from *any* source is detected
-with no setup. What it has actually been read against:
+with no setup. The one engine internal it touches is
+`OverworldState:goFishing`, and only in FISH mode (see Notes). What it has
+actually been read against:
 
 | project | version | notes |
 | --- | --- | --- |
@@ -245,6 +309,10 @@ Leave its **RANDOM ENC** setting **on**. With it off, Wilds of Kanto returns
 roll off entirely -- and the classic roll is the only thing this mod's
 shuffle can trigger. The hunt would walk in place for hours and never find a
 single encounter.
+
+This only applies to **HUNT MODE = WALK**. A rod does not go through
+`encounter.roll` at all, so FISH mode hunts normally with **RANDOM ENC**
+off -- and is the way to hunt on that setup without changing it.
 
 ### Voxel camera rungs
 

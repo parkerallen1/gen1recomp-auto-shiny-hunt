@@ -10,14 +10,16 @@
     "battle.run",
     "battle.overlay",
     "encounter.roll",
-    "music.volume"
+    "music.volume",
+    "map.reloaded",
+    "world.block_replaced"
   ],
   "upstream": [
     {
       "repo": "bryanthaboi/gen1recomp",
       "role": "engine",
       "verified": "v0.1.75",
-      "why": "every hook we wrap, plus GameSpeed.LEVELS, Stats.isShiny, mod.save, mod.ui.push (the ListMenu screen id and its onChoose contract), and mod.content.pokemon:each"
+      "why": "every hook we wrap, plus GameSpeed.LEVELS, Stats.isShiny, mod.save, mod.ui.push (the ListMenu screen id and its onChoose contract), mod.content.pokemon:each, mod.world:overworld/current/mapOverview (the '~' water marker), save.inventory, and -- the one internal, FISH mode only -- OverworldState:goFishing plus the player.surfing / fishing / fishPose fields the bag's own rod check reads. TextBox popping itself before running the onDone that pushes its successor is load-bearing for how a cast's boxes are recognised; re-read src/render/TextBox.lua if that moves."
     },
     {
       "repo": "artyrambles/DRAMALESS_SHAPE",

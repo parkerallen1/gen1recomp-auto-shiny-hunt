@@ -169,7 +169,22 @@ function H.load(opts)
         if token then t.holds = t.holds - 1 end
       end,
     },
-    world = { current = function() return t.cell end },
+    -- mod.world. `current` is the player cell the walk shuffle watches;
+    -- `overworld` and `mapOverview` are what FISH mode reads -- a live
+    -- OverworldState stand-in whose goFishing records the cast the way the
+    -- real one starts it, and the read-only water map the real
+    -- WorldAPI:mapOverview returns.
+    world = {
+      current = function() return t.cell end,
+      overworld = function()
+        if t.overworldError then error("no overworld", 0) end
+        return t.ow
+      end,
+      mapOverview = function()
+        if not t.mapView then return nil, "no overworld" end
+        return t.mapView
+      end,
+    },
     content = { pokemon = {
       get = function(_, id)
         return { name = (opts.speciesName or "MON") .. tostring(id) }
@@ -215,6 +230,42 @@ function H.load(opts)
   }
 
   t.cell = { x = 3, y = 4 }
+
+  -- A screen pushed or popped by identity, the way the engine delivers one.
+  -- The identity is the point: a text box pops itself *before* the onDone
+  -- that pushes its successor, so a cast's own boxes and a menu the player
+  -- opened are told apart by which table came back, never by how deep the
+  -- stack got.
+  function t.pushScreen(over)
+    local screen = over or {}
+    t.emit("screen.pushed", { state = screen })
+    return screen
+  end
+  function t.popScreen(screen)
+    t.emit("screen.popped", { state = screen })
+  end
+
+  -- The fishing spot: a 5x4 map with water along the top row, and the player
+  -- standing on land. A fishing test sets t.cell's facing to aim the cast.
+  t.casts = {}
+  t.ow = {
+    isOverworld = true,
+    player = { surfing = false },
+    -- OverworldState:goFishing pushes its ". . ." box from inside the call,
+    -- so a stand-in that returned quietly would hand the mod a stack the
+    -- engine would never have shown it. t.box is that box, for the test to
+    -- pop when it wants the cast to reach its verdict.
+    goFishing = function(_, rod)
+      t.casts[#t.casts + 1] = rod
+      t.box = t.pushScreen()
+      if t.onCast then t.onCast(rod) end
+    end,
+  }
+  t.mapView = {
+    mapId = "ROUTE_1", width = 5, height = 4,
+    rows = { "~~~~~", ".....", ".....", "....." },
+  }
+
   local chunk = assert(loadfile(opts.entry or "main.lua"))
   chunk()(mod)
   t.mod = mod
@@ -324,10 +375,12 @@ function H.composeCtx(w, h, over)
   return ctx
 end
 
-function H.game(speed, override)
+-- `bag` is save.inventory: item id -> count, the shape Bag.add writes and
+-- the only part of it FISH mode reads (does the player own this rod).
+function H.game(speed, override, bag)
   local g = {
-    save = { options = { speed = speed } }, speedOverride = override,
-    input = {}, writes = 0,
+    save = { options = { speed = speed }, inventory = bag or {} },
+    speedOverride = override, input = {}, writes = 0,
   }
   g.writeOptions = function(self) self.writes = self.writes + 1 end
   return g

@@ -3,6 +3,37 @@
 Format: [keep a changelog](https://keepachangelog.com/en/1.1.0/).
 Version headings match `manifest.json`'s `version`.
 
+## 0.7.0
+
+### Added
+
+- **Fishing**: a new `HUNT MODE` option picks between `WALK` (the shuffle,
+  unchanged and still the default) and `FISH`. In `FISH` mode the mod never
+  moves the player: it casts a rod at the water the character is already
+  facing, mashes through the engine's own `. . .` and verdict boxes, and
+  casts again -- for as long as the hunt runs. A hooked encounter arrives as
+  an ordinary wild battle, so every shiny check, flee, encounter count,
+  FOCUS target and blackout rule applies to it with nothing added. `ROD`
+  chooses which rod to cast; `BEST OWNED` (the default) takes the highest
+  tier actually in the bag, and a rod that is not in the bag is never used.
+  Because it does not need the classic step-based roll, this also works on a
+  setup where that roll is switched off -- Wilds of Kanto with `RANDOM ENC`
+  off included.
+- The HUD tag names why a rod is not casting -- `FACE WATER`, `NO ROD`,
+  `SURFING` -- instead of the bare `HUNT IDLE` the shuffle shows, since
+  every one of those is fixable from where the player is standing. The
+  FOCUS offer panel says the same thing before a session starts, rather
+  than covering the screen for 25 minutes over a rod that cannot cast.
+
+### Changed
+
+- The hunting clock counts a cast's own text boxes as hunting -- they are
+  the hunt's screen, not a menu interrupting it. A menu the mod did not put
+  up still parks the clock exactly as before.
+- `KEEP SCREEN AWAKE` now applies whenever `AUTO HUNT` is on, rather than
+  only on the ticks the hunt was unblocked. `FISH` mode spends most of its
+  cycle behind a text box, which sat on the blocked side of that check.
+
 ## 0.6.0
 
 ### Added
