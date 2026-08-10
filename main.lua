@@ -108,14 +108,15 @@ return function(mod)
     -- ever reads input, so walking must stay silent whenever this is > 0
     -- -- that's the options-menu-scrolling-itself bug.
     blockingLayers = 0,
-    -- battle reaction
-    fleeing = false, autoRunArmed = false, shinyUp = false,
+    -- battle reaction.  inBattle is any battle at all, tracked separately
+    -- from fleeing because the clock counts a fight (and a shiny sitting in
+    -- one) as hunting, whether this mod is running from it or not.
+    fleeing = false, autoRunArmed = false, shinyUp = false, inBattle = false,
     -- stats: elapsed is real (wall-clock) time, deliberately not tied to
     -- GAME SPEED or fixed-step dt -- love.timer.getTime() is a real clock.
     -- It only advances while the hunt is actually running (see huntIsRunning):
-    -- a menu, the title screen, a load or a shiny sitting on screen all park
-    -- it, so the number stays "time spent hunting" rather than "time since
-    -- you switched it on".
+    -- a menu, the title screen or a load parks it, so the number stays "time
+    -- spent hunting" rather than "time since you switched it on".
     wasRunning = false, elapsedBase = 0, resumedAt = nil,
     totalEncounters = 0, speciesCounts = {}, speciesOrder = {},
     -- HUD: size, the tap targets the last drawn frame published, and which
@@ -150,6 +151,11 @@ return function(mod)
     if isBlocking(ev.state) then
       state.blockingLayers = math.max(0, state.blockingLayers - 1)
     end
+    -- A battle is always at least one layer over the overworld, so back at
+    -- zero there cannot be one on screen.  Belt and braces for the clock: if
+    -- a battle.ended ever went missing, inBattle would otherwise hold the
+    -- clock running forever.
+    if state.blockingLayers == 0 then state.inBattle = false end
   end)
 
   local function speciesLabel(species)
@@ -159,6 +165,9 @@ return function(mod)
   end
 
   mod.events:on("battle.started", function(ev)
+    -- set before any of the early returns below: the clock counts every
+    -- battle, including the trainer and Safari ones this mod stays out of
+    state.inBattle = true
     state.shinyUp = false
     if ev.kind == "wild" then
       local species = ev.battle and ev.battle.enemy and ev.battle.enemy.mon
@@ -194,6 +203,7 @@ return function(mod)
     state.fleeing = false
     state.autoRunArmed = false
     state.shinyUp = false
+    state.inBattle = false
   end)
 
   -- only forces success for the flee *this mod* triggers above -- a
@@ -674,21 +684,20 @@ return function(mod)
     end
   end
 
-  -- Is the hunt actually running right now?  This is what the clock counts,
-  -- and it is deliberately narrower than "AUTO HUNT is on":
+  -- Is the hunt actually running right now?  This is what the clock counts:
   --
-  --   * a shiny sitting on screen parks it -- the number you want is how
-  --     long the hunt took, not how long the phone sat there afterwards
-  --   * our own flee counts, even though a battle screen is up: that is one
-  --     turn of the hunt's own cycle
-  --   * anything else stacked over the overworld -- a menu, a dialog, the
-  --     title screen, a load, a trainer fight -- is not hunting
-  --   * and on the overworld it only counts once we are genuinely walking,
-  --     which is what keeps a boot straight into a hunting save from
-  --     counting the loading screen
+  --   * a battle counts, whatever kind and however long it stays up.  The
+  --     fight is part of the hunt's own cycle, and a shiny left on screen is
+  --     the hunt still holding its result out for you.
+  --   * a menu, a dialog, the title screen or a load on top of the overworld
+  --     is not hunting, and neither is anything else that stops the shuffle.
+  --   * on the overworld it counts once the shuffle is genuinely walking,
+  --     rather than merely unblocked -- which is what keeps a boot straight
+  --     into a hunting save from counting its loading screen, whatever the
+  --     screen stack happened to look like before this mod was listening.
   local function huntIsRunning(hunting)
-    if not hunting or state.shinyUp then return false end
-    if state.fleeing then return true end
+    if not hunting then return false end
+    if state.inBattle then return true end
     if state.blockingLayers > 0 then return false end
     return state.token ~= nil or state.awaitingConfirm
   end

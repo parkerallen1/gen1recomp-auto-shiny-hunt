@@ -3,6 +3,22 @@
 Format: [keep a changelog](https://keepachangelog.com/en/1.1.0/).
 Version headings match `manifest.json`'s `version`.
 
+## 0.5.1
+
+### Changed
+
+- The hunting clock was too strict in 0.5.0: it parked for any battle this
+  mod wasn't itself fleeing from, and for a shiny sitting on screen. Battles
+  now count -- every kind, however long they stay up -- because the fight is
+  part of the hunt's cycle and a shiny left on screen is the hunt holding
+  its result out for you. A menu opened inside a battle (party, bag) counts
+  too. What still parks it is what was actually meant: a menu or dialog over
+  the overworld, the title screen, a load, or anywhere else the shuffle
+  cannot walk.
+- Returning to the overworld now clears the mod's in-battle flag as well as
+  `battle.ended` does, so a missed end event can't leave the clock running
+  forever.
+
 ## 0.5.0
 
 ### Changed

@@ -60,16 +60,17 @@ game restarts or the mod reloads.
 The clock is real wall-clock time, not game time -- the GAME SPEED setting
 does not stretch it -- and it counts **time spent hunting**, not time since
 you switched the mod on. It runs while the shuffle is walking and through
-the mod's own flees, and parks whenever the hunt isn't actually happening:
+any battle, shiny ones included: a fight is part of the hunt's cycle, and a
+shiny left on screen is the hunt holding its result out for you. It parks
+for the things that aren't hunting at all:
 
 - AUTO HUNT off (tag reads `HUNT PAUSED`)
-- a menu, a dialog, the title screen or a load on top of the overworld, or
-  anywhere the shuffle can't walk (tag reads `HUNT IDLE`)
-- a shiny sitting on screen (tag reads `SHINY!`) -- so the number you pick
-  the phone up to is how long the hunt took, not how long it then waited
+- a menu or dialog over the overworld, the title screen, a load, or anywhere
+  else the shuffle can't walk (tag reads `HUNT IDLE`)
 
-The tag next to the clock always says which of those it is, so a clock that
-isn't moving explains itself.
+A menu opened *inside* a battle -- the party screen, the bag -- doesn't park
+it; that's still the battle. The tag next to the clock always says which
+state it's in, so a clock that isn't moving explains itself.
 
 It comes in three sizes, and the chips it draws on itself switch between
 them with a tap (or a mouse click on desktop):

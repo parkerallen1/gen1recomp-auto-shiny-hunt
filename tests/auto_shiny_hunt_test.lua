@@ -262,7 +262,8 @@ do
   t.emit("battle.ended", {})
   t.emit("screen.popped", { state = { isOverworld = false } })
 
-  -- a shiny sitting on screen stops it: the number is time-to-shiny
+  -- a battle counts however long it stays up, shiny included: the fight is
+  -- part of the hunt, and a shiny left on screen is its result being held out
   t.cell = { x = 3, y = 6 }
   tick(1); tick(1)
   t.emit("screen.pushed", { state = { isOverworld = false } })
@@ -270,9 +271,16 @@ do
   tick(1)
   local found = elapsed()
   tick(3600)
-  ok(elapsed() == found, "an hour parked on a shiny does not reach the clock")
+  ok(elapsed() >= found + 3600, "the clock keeps running while a shiny sits")
 
-  -- and the HUD says why it stopped
+  -- even with a menu stacked over the battle (the party menu, the bag)
+  t.emit("screen.pushed", { state = { isOverworld = false } })
+  local inMenu = elapsed()
+  tick(30)
+  ok(elapsed() >= inMenu + 30, "a menu opened inside a battle does not park it")
+  t.emit("screen.popped", { state = { isOverworld = false } })
+
+  -- the HUD still calls the shiny out, clock running or not
   t.state.hudMode = "normal"
   rec.reset()
   t.hud(H.viewport(800, 600))
@@ -282,8 +290,22 @@ do
   end
   ok(tag == "SHINY!", "the HUD tag calls out the shiny (got " .. tostring(tag) .. ")")
 
-  t.emit("battle.ended", {})
+  -- A battle that ended without its battle.ended must not leave the clock
+  -- running forever. Returning to no layers over the overworld clears the
+  -- flag; the walk resuming is why the clock legitimately keeps going there,
+  -- so prove the flag itself, then park it by taking the walk away.
   t.emit("screen.popped", { state = { isOverworld = false } })
+  ok(t.state.inBattle == false,
+     "back on the overworld the battle flag clears with no end event")
+  t.cell = nil
+  t.step(g, 1.0) -- let any pending step confirmation time out
+  tick(1)
+  local stranded = elapsed()
+  tick(60)
+  ok(elapsed() == stranded, "with the flag cleared and nowhere to walk it parks")
+
+  -- and a plain menu on the overworld reads as IDLE
+  t.emit("battle.ended", {})
   rec.reset()
   t.emit("screen.pushed", { state = { isOverworld = false } })
   tick(2)
