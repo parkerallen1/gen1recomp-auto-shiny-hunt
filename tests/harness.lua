@@ -380,8 +380,16 @@ end
 function H.game(speed, override, bag)
   local g = {
     save = { options = { speed = speed }, inventory = bag or {} },
-    speedOverride = override, input = {}, writes = 0,
+    speedOverride = override, writes = 0,
   }
+  -- game.input, as much of Game.input as the PAUSE gesture reads: which
+  -- buttons are physically down. g.hold/g.release drive it the way a player
+  -- holding the button would; the mod's own presses never come through here,
+  -- which is exactly the asymmetry the gesture relies on.
+  local held = {}
+  g.input = { isDown = function(_, btn) return held[btn] == true end }
+  function g.hold(btn) held[btn] = true end
+  function g.release(btn) held[btn] = nil end
   g.writeOptions = function(self) self.writes = self.writes + 1 end
   return g
 end

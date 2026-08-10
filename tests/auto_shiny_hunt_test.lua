@@ -578,6 +578,210 @@ do
   t.emit("battle.ended", {})
 end
 
+-- -------------------------------------------------------------- pause --
+
+-- The hunt has to be stoppable from inside a running hunt. It is not enough
+-- that AUTO HUNT exists in the settings: the shuffle holds a direction with
+-- no gap, which keeps the player permanently mid-step, and
+-- OverworldState:handleInput drops A/START entirely while player.moving --
+-- so the settings screen is exactly what a running hunt makes hard to open.
+-- These cover the two ways out that do not need it.
+
+section("pause stops the hunt")
+do
+  local t = H.load()
+  t.options.enabled = true
+  local g = H.game(200)
+
+  t.step(g)
+  ok(t.holds == 1, "hunting holds a direction to begin with")
+  ok(g.save.options.speed == 10, "and the speed cap is holding GAME SPEED down")
+
+  t.state.hudMode = "normal"
+  t.hud(H.viewport(800, 600))
+  ok(t.area("pause"), "the normal HUD publishes a pause target")
+  ok(t.tap("pause"), "which takes a tap")
+  ok(t.state.paused, "and pauses the hunt")
+
+  t.step(g)
+  ok(t.holds == 0, "a paused hunt lets go of the direction it was holding")
+  ok(g.save.options.speed == 200,
+     "and hands GAME SPEED back, so the game is usable again")
+
+  -- the encounter side stops too, or a pause would still be fleeing
+  t.emit("battle.started", H.wildEvent(H.SHINY_DVS, 3))
+  ok(not t.state.fleeing, "a paused hunt does not flee what it runs into")
+  ok(not t.state.shinyUp, "and does not claim the shiny either")
+  t.emit("battle.ended", {})
+
+  -- a flee already in flight stops mashing: the battle is the player's now
+  t.state.paused = false
+  t.emit("battle.started", H.wildEvent(H.COMMON_DVS, 4))
+  ok(t.state.fleeing, "unpaused, it flees again")
+  t.state.paused = true
+  local taps = #t.taps
+  t.step(g); t.step(g)
+  ok(#t.taps == taps, "pausing mid-flee stops the A mash")
+  t.emit("battle.ended", {})
+
+  -- and it comes back
+  t.state.paused = false
+  t.step(g); t.step(g)
+  ok(t.holds == 1, "unpausing picks the shuffle back up")
+end
+
+section("pause is reachable at every HUD size")
+do
+  local t = H.load({ speciesName = "NIDORANFEMALE" })
+  t.options.enabled = true
+  -- a loaded HUD: long species names are what push the corner panel widest,
+  -- and the pause chip must survive that on the narrowest screen
+  for i = 1, 40 do
+    t.emit("battle.started", H.wildEvent(H.COMMON_DVS, i % 11))
+    t.emit("battle.ended", {})
+  end
+  for _, mode in ipairs({ "mini", "normal", "full" }) do
+    for _, wh in ipairs(SIZES) do
+      local W, Ht = wh[1], wh[2]
+      t.state.hudMode = mode
+      t.state.paused = false
+      rec.reset()
+      t.hud(H.viewport(W, Ht))
+      local area = t.area("pause")
+      local where = ("%s at %dx%d"):format(mode, W, Ht)
+      if ok(area ~= nil, ("%s publishes a pause target"):format(where)) then
+        ok(area.x >= 0 and area.y >= 0
+           and area.x + area.w <= W and area.y + area.h <= Ht,
+           ("%s keeps the pause target on screen"):format(where))
+        ok(t.tap("pause") and t.state.paused,
+           ("%s pauses when tapped"):format(where))
+      end
+    end
+  end
+end
+
+section("pause reads on the HUD")
+do
+  local t = H.load()
+  t.state.hudMode = "normal"
+  local function tag()
+    rec.reset()
+    t.hud(H.viewport(800, 600))
+    for _, p in ipairs(rec.prints) do
+      if p.text:match("^HUNT") or p.text:match("^PAUSED") or p.text:match("^SHINY") then
+        return p.text
+      end
+    end
+  end
+  t.options.enabled = false
+  ok(tag() == "HUNT OFF", "AUTO HUNT off reads as HUNT OFF (got " .. tostring(tag()) .. ")")
+  t.options.enabled = true
+  t.state.paused = true
+  ok(tag() == "PAUSED", "a paused hunt reads as PAUSED (got " .. tostring(tag()) .. ")")
+  -- the two are different states with different remedies, so they must not
+  -- read the same
+  ok(tag() ~= "HUNT OFF", "and does not read the same as the setting being off")
+end
+
+section("pause parks the clock")
+do
+  local t = H.load()
+  t.options.enabled = true
+  local g = H.game(1)
+  local function elapsed()
+    return t.state.elapsedBase
+      + (t.state.resumedAt and (rec.clock - t.state.resumedAt) or 0)
+  end
+  local function tick(seconds)
+    rec.clock = rec.clock + (seconds or 1)
+    t.step(g)
+  end
+  rec.clock = 3000
+  tick(1); tick(1)
+  local running = elapsed()
+  tick(10)
+  ok(elapsed() >= running + 10, "the clock runs while hunting")
+  t.state.paused = true
+  tick(1)
+  local parked = elapsed()
+  tick(600)
+  ok(elapsed() == parked, "ten minutes paused do not reach the clock")
+end
+
+section("SELECT held pauses without the HUD or the menu")
+do
+  local t = H.load()
+  t.options.enabled = true
+  t.options.show_hud = false -- no chip to tap: this is the only way out
+  local g = H.game(1)
+
+  t.step(g)
+  ok(t.holds == 1, "the shuffle is running")
+
+  -- a tap is not the gesture
+  g.hold("select")
+  t.step(g, 0.2)
+  g.release("select")
+  t.step(g, 0.2)
+  ok(not t.state.paused, "a brief SELECT does not pause")
+
+  -- a hold is. Note the mod is holding a direction throughout -- the gesture
+  -- has to work during exactly that, since that is what it exists to stop.
+  g.hold("select")
+  t.step(g, 0.5)
+  ok(not t.state.paused, "half a second is not yet a hold")
+  t.step(g, 0.6)
+  ok(t.state.paused, "a full second of SELECT pauses the hunt")
+
+  -- one toggle per hold, not one per tick
+  t.step(g, 2.0); t.step(g, 2.0)
+  ok(t.state.paused, "keeping SELECT down does not flip it back")
+
+  -- releasing re-arms it, and it toggles back
+  g.release("select")
+  t.step(g, 0.1)
+  g.hold("select")
+  t.step(g, 1.1)
+  ok(not t.state.paused, "a second hold unpauses")
+  g.release("select")
+
+  -- SELECT is a chord modifier in the engine, so it only counts alone
+  t.step(g, 0.1)
+  g.hold("select"); g.hold("a")
+  t.step(g, 1.5); t.step(g, 1.5)
+  ok(not t.state.paused, "SELECT with another button held is not the gesture")
+  g.release("a"); g.release("select")
+end
+
+section("pause and FOCUS")
+do
+  local t = H.load()
+  t.options.enabled = true
+  local g = H.game(1)
+
+  -- starting a session is an explicit "hunt now"
+  t.state.paused = true
+  t.state.focus.confirm = "offer"
+  t.hud(H.viewport(800, 600))
+  ok(t.tap("focus_start"), "START is tappable from the offer")
+  ok(t.state.focus.active, "the session starts")
+  ok(not t.state.paused, "and starting one lifts a pause")
+
+  -- during a session the gesture is inert: the session owns the screen and
+  -- has its own END, and a hunt quietly stopped under the cover would leave
+  -- the countdown running honestly over nothing
+  g.hold("select")
+  t.step(g, 2.0); t.step(g, 2.0)
+  ok(not t.state.paused, "SELECT does not pause during a FOCUS session")
+  g.release("select")
+
+  -- no pause chip is reachable under the cover either
+  rec.reset()
+  t.hud(H.viewport(800, 600))
+  ok(t.area("pause") == nil, "and the covered screen publishes no pause target")
+  ok(t.area("focus_end") ~= nil, "only END, which is the documented way out")
+end
+
 -- --------------------------------------------------------------- fish --
 
 -- A cast is: check the water in front of the player, call the engine's own

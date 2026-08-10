@@ -41,6 +41,41 @@ wild Pokemon actually ends up with, however they got there.
    every one of its own flee attempts to succeed while it's on, but never
    touches a manual RUN you press yourself.
 
+## Stopping it
+
+**A running hunt owns the d-pad**, so you cannot simply walk away from it,
+and the START menu is awkward to open while it does (the game ignores button
+presses that land mid-step, and the shuffle keeps you mid-step). So the stop
+button does not live in the menu:
+
+- **Tap the `II` chip on the HUD.** It is on every HUD size, in the same
+  place, and a tap works even while the mod is holding a direction down. It
+  turns into `>` while paused; tap it again to carry on.
+- **Or hold SELECT for a second.** Same toggle, no HUD needed -- this is the
+  one that works with SHOW HUD off, or on a device with no touchscreen.
+  SELECT on its own, though: the engine reads SELECT + a shoulder button as
+  a display chord, so the gesture ignores SELECT with A, B or START held.
+
+Pausing lets go of the held direction, stops the auto-flee mid-battle if one
+is running, stops casting in FISH mode, hands **GAME SPEED** back (so a 10X
+hunt stops being unplayable), and parks the clock. The HUD tag reads
+`PAUSED`. Nothing is lost -- counts, the clock and the species list all keep
+their totals.
+
+A pause is "stop right now" and is not saved. Two things worth knowing:
+
+- It is **not** the same as switching AUTO HUNT off, and the HUD says which
+  is which: `PAUSED` is one tap from running again, `HUNT OFF` is your
+  setting and only the settings screen changes it. If you want the hunt to
+  stay off across a restart, switch the setting off.
+- The **title screen is always safe**: there is no overworld there, so
+  nothing is held and OPTIONS -> MOD SETTINGS is reachable normally. If you
+  ever do get wedged, restarting the app and turning AUTO HUNT off from the
+  title is the guaranteed way out.
+
+During a FOCUS session neither control does anything -- the session owns the
+screen and has its own **END** chip (see Focus timer below).
+
 ## Fishing
 
 **HUNT MODE = FISH** casts a rod at the water tile the player is facing,
@@ -107,7 +142,8 @@ any battle, shiny ones included: a fight is part of the hunt's cycle, and a
 shiny left on screen is the hunt holding its result out for you. It parks
 for the things that aren't hunting at all:
 
-- AUTO HUNT off (tag reads `HUNT PAUSED`)
+- paused (tag reads `PAUSED`) -- see Stopping it above
+- AUTO HUNT off (tag reads `HUNT OFF`)
 - a menu or dialog over the overworld, the title screen, a load, or anywhere
   else the shuffle can't walk (tag reads `HUNT IDLE`)
 
@@ -130,6 +166,8 @@ them with a tap (or a mouse click on desktop):
 | **normal** | the corner panel -- clock, total, top species |
 | **full** | the HUD owns the screen; the game shrinks to a corner PiP |
 
+- `II` pauses the hunt and `>` resumes it. It is on all three sizes,
+  because a hunt you cannot stop is the one thing the HUD must never hide.
 - `+` grows the HUD, `-` shrinks it. From the corner panel, `-` goes to the
   pill and tapping the pill brings the panel back.
 - At full size the game is still live in the picture-in-picture corner --

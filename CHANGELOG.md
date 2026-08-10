@@ -3,6 +3,41 @@
 Format: [keep a changelog](https://keepachangelog.com/en/1.1.0/).
 Version headings match `manifest.json`'s `version`.
 
+## 0.7.1
+
+### Fixed
+
+- **A running hunt could not be stopped from inside itself.** The shuffle
+  re-presses its direction in the same tick the previous step lands, so the
+  player is permanently mid-step -- and `OverworldState:handleInput` drops A
+  and START entirely while `player.moving`. The only control was `AUTO HUNT`
+  in OPTIONS -> MOD SETTINGS, behind exactly the menu a running hunt makes
+  hard to open, which left a hunt you had to wait out. There are now two
+  ways to stop one that do not need the menu:
+  - a `II` / `>` chip on the HUD, at **all three sizes** (a pointer press
+    reaches the mod regardless of what is holding a button down), and
+  - **holding SELECT for a second**, which needs no HUD at all, so it still
+    works with `SHOW HUD` off or on a device with no touchscreen. SELECT
+    alone only: the engine reads SELECT + shoulder as a display chord, so
+    the gesture ignores SELECT with A, B or START held.
+
+  Pausing releases the held direction, stops the auto-flee's A mash
+  mid-battle, stops casting in FISH mode, hands `GAME SPEED` back (a 10X
+  hunt is otherwise unplayable while you try to escape it), and parks the
+  clock. Counts, the clock and the species list keep their totals. A pause
+  is deliberately not persisted -- after a restart the title screen has no
+  overworld, so nothing is held and the settings are reachable normally.
+
+### Changed
+
+- The tag for `AUTO HUNT` being off now reads `HUNT OFF` rather than
+  `HUNT PAUSED`, so it cannot be confused with the new `PAUSED`. They are
+  different states with different remedies: `PAUSED` is one tap from
+  running again, `HUNT OFF` is the player's saved setting.
+- Starting a FOCUS session lifts a pause, since starting one is an explicit
+  "hunt now". Neither pause control does anything during a session -- the
+  cover owns the screen and `END` is the documented way out.
+
 ## 0.7.0
 
 ### Added

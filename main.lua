@@ -71,6 +71,12 @@ local SPEED_CAP_CHOICES = {
 -- this, so it only fires when the way is genuinely blocked
 local MAX_HOLD_SECONDS = 0.9
 
+-- how long SELECT has to be held on its own before it toggles PAUSE.  A
+-- hold rather than a tap because the engine reads SELECT as a chord
+-- modifier (Game:gamepadpressed, Select+shoulder), and long enough that
+-- brushing it cannot stop a hunt by accident.
+local PAUSE_HOLD_SECONDS = 1.0
+
 -- how long a FOCUS peek panel, or the end-early confirm, stays up before it
 -- dismisses itself
 local FOCUS_PEEK_SECONDS = 4
@@ -180,6 +186,9 @@ return function(mod)
     -- HUD: size, the tap targets the last drawn frame published, and which
     -- pointer (if any) is currently down on one of them
     hudMode = "normal", hitAreas = nil, grabbedId = nil, grabbedArea = nil,
+    -- the stop-right-now flag (see huntEnabled) and the SELECT-hold that
+    -- can set it without touching the HUD or the menu
+    paused = false, selectHeldFor = 0, selectArmed = true,
     pipAspect = GB_ASPECT,
     -- what GAME SPEED (and the --speed / POKEPORT_SPEED run argument) were
     -- before the cap pushed them down, kept so hunting off hands the
@@ -222,6 +231,25 @@ return function(mod)
       peekUntil = 0, confirm = nil, confirmUntil = 0, summary = nil,
     },
   }
+
+  -- ------------------------------------------------------------- PAUSE --
+  -- AUTO HUNT is the player's setting; PAUSE is a stop on top of it, and
+  -- the reason it has to exist separately is that a mod cannot write its own
+  -- options (mod.options is define/get only), so the only way to stop a
+  -- running hunt used to be a trip to OPTIONS -> MOD SETTINGS -- through a
+  -- START menu that the shuffle itself makes hard to open, because a
+  -- permanently held direction keeps the player permanently mid-step and
+  -- OverworldState:handleInput drops every input while player.moving.
+  -- That is a hunt you cannot get out of, which is why this is reachable
+  -- two ways that do not need the menu at all: the HUD's own P chip, and
+  -- holding SELECT.
+  --
+  -- Deliberately not persisted: it means "stop right now", and after a
+  -- restart the title screen is a safe place to switch AUTO HUNT off
+  -- properly (nothing is held there -- the shuffle has no overworld).
+  local function huntEnabled()
+    return mod.options:get("enabled") == true and not state.paused
+  end
 
   local function stopWalking()
     if state.token then
@@ -518,7 +546,7 @@ return function(mod)
       end
     end
 
-    if not mod.options:get("enabled") then return end
+    if not huntEnabled() then return end
     if ev.kind ~= "wild" then return end
     local mon = ev.battle and ev.battle.enemy and ev.battle.enemy.mon
     if isShinyMon(mon) then
@@ -632,6 +660,12 @@ return function(mod)
 
   local function startFocus()
     local f = state.focus
+    -- starting a session is an explicit "hunt now", so it lifts a PAUSE
+    -- rather than running a fixed-length session over a stopped hunt. It
+    -- also keeps the session the only state that has to be reasoned about
+    -- while the cover is up: PAUSE cannot be toggled during one (the END
+    -- chip is the way out), so it is always false for the duration.
+    state.paused = false
     f.active = true
     f.startedAt = nowReal()
     f.lengthSec = focusMinutes() * 60
@@ -743,7 +777,65 @@ return function(mod)
     return ("TARGETS: %d SPECIES"):format(n)
   end
 
+  -- Stop everything the hunt is doing, or start it again.  Releasing the
+  -- held direction and handing the speed cap back are not done here: both
+  -- fall out of huntEnabled() going false on the next tick, which is the
+  -- same path AUTO HUNT being switched off already takes.
+  local function togglePause()
+    state.paused = not state.paused
+  end
+
+  -- SELECT held on its own toggles PAUSE.  This is the escape hatch for
+  -- everyone the HUD chip cannot reach: SHOW HUD switched off, a device with
+  -- no touchscreen and no mouse.
+  --
+  -- Reading buttons means reading game.input, which is not part of
+  -- mod.input's press/release facade -- pcall'd throughout so an engine that
+  -- renames it costs the gesture and nothing else.  SELECT is the right
+  -- button because the overworld has no use for it at all: the engine's only
+  -- reading of it is as a chord modifier next to a shoulder button
+  -- (Game:gamepadpressed), which is also why a held shoulder chord can trip
+  -- this -- harmless, since the same gesture undoes it.
+  --
+  -- Directions are deliberately NOT part of the "on its own" test: the
+  -- shuffle's own held direction is down through the engine's ordinary
+  -- source bookkeeping, so requiring an empty d-pad would mean the gesture
+  -- never fired during the one thing it exists to stop.
+  local PAUSE_BLOCKERS = { "a", "b", "start" }
+
+  local function selectAlone(game)
+    local input = game and game.input
+    if not (input and input.isDown) then return false end
+    local ok, down = pcall(input.isDown, input, "select")
+    if not (ok and down) then return false end
+    for _, btn in ipairs(PAUSE_BLOCKERS) do
+      local okOther, other = pcall(input.isDown, input, btn)
+      if okOther and other then return false end
+    end
+    return true
+  end
+
+  local function pauseGestureTick(game, dt)
+    if state.focus.active then
+      state.selectHeldFor, state.selectArmed = 0, false
+      return
+    end
+    if not selectAlone(game) then
+      state.selectHeldFor, state.selectArmed = 0, true
+      return
+    end
+    if not state.selectArmed then return end
+    state.selectHeldFor = state.selectHeldFor + (dt or 0)
+    if state.selectHeldFor >= PAUSE_HOLD_SECONDS then
+      -- one toggle per hold: re-arming waits for SELECT to come back up, so
+      -- keeping it down does not flip the hunt on and off once a second
+      state.selectHeldFor, state.selectArmed = 0, false
+      togglePause()
+    end
+  end
+
   local FOCUS_ACTIONS = {
+    pause = function() togglePause() end,
     offer = function() state.focus.confirm = "offer" end,
     start = function() startFocus() end,
     cancel = function() state.focus.confirm = nil end,
@@ -883,7 +975,11 @@ return function(mod)
   -- applies (FACE WATER, NO ROD, SURFING) instead of a bare IDLE.
   local function statusText()
     if state.shinyUp then return "SHINY!" end
-    if not mod.options:get("enabled") then return "HUNT PAUSED" end
+    -- the two stopped states read differently on purpose: PAUSED is this
+    -- mod holding off and one tap from running again, HUNT OFF is the
+    -- player's own setting and only the settings screen changes it
+    if state.paused then return "PAUSED" end
+    if not mod.options:get("enabled") then return "HUNT OFF" end
     if state.wasRunning then return fishMode() and "FISHING" or "HUNT ON" end
     if fishMode() and state.fish.reason then return state.fish.reason end
     return "HUNT IDLE"
@@ -916,8 +1012,14 @@ return function(mod)
     panel(x, y, w, h)
     printAt(text, font, x + pad, y + pad, state.shinyUp and 1 or 0.95,
       1, 1, state.shinyUp and 0.25 or 1)
-    -- the pill is its own tap target: there is no room on it for chips
+    -- the pill itself is the tap target that grows the HUD back; there is no
+    -- room on it for the usual chip row
     areas[#areas + 1] = { id = "pill", mode = "normal", x = x, y = y, w = w, h = h }
+    -- ... but the stop button still gets a square of its own beside it. The
+    -- one control a stuck player needs cannot be the one that hides at the
+    -- smallest size.
+    chip(areas, "pause", nil, state.paused and ">" or "II",
+      x + w + pad, y, h, "pause")
   end
 
   local function drawNormal(vp, areas)
@@ -948,9 +1050,15 @@ return function(mod)
     local showFocusChip = mod.options:get("focus_chip") and not state.focus.active
       and not state.focus.summary and not state.focus.confirm
 
+    -- the chip row, right-aligned in the panel: 4px between neighbours, and
+    -- the gaps counted into the width the panel has to reserve or the
+    -- leftmost chip creeps back over the tag on the narrowest screen
+    local CHIP_GAP = 4
+    local chipCount = showFocusChip and 4 or 3
+
     local function widthOf(font, text) return font and font:getWidth(text) or 0 end
     local topW = widthOf(tagFont, tag) + pad
-      + chipSize * (showFocusChip and 3 or 2) + pad
+      + chipSize * chipCount + CHIP_GAP * (chipCount - 1) + pad
     local bodyW = math.max(widthOf(timerFont, timer), widthOf(countFont, count))
     for _, text in ipairs(rowText) do
       bodyW = math.max(bodyW, widthOf(rowFont, text))
@@ -972,12 +1080,21 @@ return function(mod)
     printAt(tag, tagFont,
       x + pad, cy + (chipSize - (tagFont and tagFont:getHeight() or 10)) / 2,
       0.8, 1, 1, state.shinyUp and 0.25 or 1)
-    if showFocusChip then
-      chip(areas, "focus_offer", nil, "F",
-        x + w - pad - chipSize * 3 - 8, cy, chipSize, "offer")
+    -- laid out right to left from the panel edge, so adding or dropping the
+    -- F chip never moves the three that are always there
+    local function chipX(slot)
+      return x + w - pad - chipSize * slot - CHIP_GAP * (slot - 1)
     end
-    chip(areas, "shrink", "mini", "-", x + w - pad - chipSize * 2 - 4, cy, chipSize)
-    chip(areas, "grow", "full", "+", x + w - pad - chipSize, cy, chipSize)
+    if showFocusChip then
+      chip(areas, "focus_offer", nil, "F", chipX(4), cy, chipSize, "offer")
+    end
+    -- the stop button, on every HUD size and always in the same place: with
+    -- the shuffle holding a direction the START menu is hard to open at all,
+    -- so this must never be the chip that got squeezed out
+    chip(areas, "pause", nil, state.paused and ">" or "II",
+      chipX(3), cy, chipSize, "pause")
+    chip(areas, "shrink", "mini", "-", chipX(2), cy, chipSize)
+    chip(areas, "grow", "full", "+", chipX(1), cy, chipSize)
     cy = cy + chipSize
 
     cy = cy + printAt(timer, timerFont, x + pad, cy) + math.floor(pad * 0.4)
@@ -1009,8 +1126,11 @@ return function(mod)
     -- the full-size screen
     areas[#areas + 1] =
       { id = "pip", mode = "normal", x = pip.x, y = pip.y, w = pip.w, h = pip.h }
+    local chipRowY = pip.y + pip.h + math.floor(m * 0.4)
+    chip(areas, "pause", nil, state.paused and ">" or "II",
+      pip.x + pip.w - chipSize * 2 - math.floor(m * 0.4), chipRowY, chipSize, "pause")
     chip(areas, "shrink", "normal", "-",
-      pip.x + pip.w - chipSize, pip.y + pip.h + math.floor(m * 0.4), chipSize)
+      pip.x + pip.w - chipSize, chipRowY, chipSize)
 
     -- text column beside the PiP, or under it when the window is too narrow
     -- for the two to sit side by side
@@ -1517,7 +1637,15 @@ return function(mod)
     -- own expiry must run whatever AUTO HUNT or the screen stack is doing
     focusTick(game)
 
-    local hunting = mod.options:get("enabled")
+    -- Also unconditional, and for the same reason the chip is drawn at every
+    -- HUD size: this is the way out of a hunt, so it cannot sit behind any
+    -- of the conditions a stuck player is trying to escape.  The one
+    -- exception is a FOCUS session, which owns the screen and has its own
+    -- END; letting SELECT quietly stop the hunt under the cover would leave
+    -- a session that is honestly counting down over nothing.
+    pauseGestureTick(game, dt)
+
+    local hunting = huntEnabled()
     applySpeedCap(game, hunting)
 
     -- Hoisted above every early return below.  A hunt that is mid battle,
@@ -1543,8 +1671,12 @@ return function(mod)
     -- state.fleeing is only ever set by our own flee (the auto-hunt one, or
     -- a FOCUS session's forced early exit), so it never needed `hunting` on
     -- top of it -- and a focus exit must mash through the text box even
-    -- with AUTO HUNT switched off
-    if state.fleeing then
+    -- with AUTO HUNT switched off.  PAUSE is the one thing that does stop
+    -- it: "stop right now" has to mean the buttons too, or a pause pressed
+    -- mid-flee would keep firing A into a battle the player has just taken
+    -- back. The half-finished flee is theirs to finish, with the A they
+    -- press themselves.
+    if state.fleeing and not state.paused then
       -- one fresh wasPressed edge per tick -- mashing, not holding, since
       -- each text box needs its own edge to advance
       mod.input:tap(game, "a")
