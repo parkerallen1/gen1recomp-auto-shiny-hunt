@@ -10,6 +10,17 @@
 -- with somebody else's wrapper on the outside; a table of one callback per
 -- hook could not.
 
+-- Some Lua 5.1 interpreters (certain LuaJIT builds without 5.2 compat
+-- enabled) lack table.pack/table.unpack. Polyfilled only when missing, so
+-- anything that already has them -- 5.2+, or a 5.2-compat LuaJIT -- is
+-- untouched.
+if not table.pack then
+  table.pack = function(...) return { n = select("#", ...), ... } end
+end
+if not table.unpack then
+  table.unpack = unpack
+end
+
 local H = {}
 
 -- ---------------------------------------------------------------- bus --
@@ -71,7 +82,7 @@ H.fakeFont = fakeFont
 -- Records every draw so a test can assert on layout: what was printed,
 -- where, and at what font size.
 function H.installLove()
-  local rec = { prints = {}, rects = {}, draws = 0, fonts = 0 }
+  local rec = { prints = {}, rects = {}, draws = 0, fonts = 0, vibrates = 0 }
   local current = fakeFont(12)
   local function num(v, what)
     assert(type(v) == "number" and v == v, ("%s is not a number: %s"):format(what, tostring(v)))
@@ -79,7 +90,8 @@ function H.installLove()
   end
   _G.love = {
     timer = { getTime = function() return rec.clock or 1000 end },
-    system = { getOS = function() return "Android" end, vibrate = function() end },
+    system = { getOS = function() return "Android" end,
+      vibrate = function() rec.vibrates = rec.vibrates + 1 end },
     window = { setDisplaySleepEnabled = function() end },
     getVersion = function() return 11, 4, 0, "Mysterious Mysteries" end,
     graphics = {
@@ -111,7 +123,7 @@ function H.installLove()
     },
   }
   rec.reset = function()
-    rec.prints, rec.rects, rec.draws = {}, {}, 0
+    rec.prints, rec.rects, rec.draws, rec.vibrates = {}, {}, 0, 0
   end
   return rec
 end
@@ -125,6 +137,7 @@ function H.load(opts)
   local bus = H.newBus()
   local t = {
     bus = bus, options = {}, schema = {}, events = {}, taps = {}, holds = 0,
+    saved = {}, pushes = {},
   }
 
   local mod = {
@@ -157,9 +170,48 @@ function H.load(opts)
       end,
     },
     world = { current = function() return t.cell end },
-    content = { pokemon = { get = function(_, id)
-      return { name = (opts.speciesName or "MON") .. tostring(id) }
-    end } },
+    content = { pokemon = {
+      get = function(_, id)
+        return { name = (opts.speciesName or "MON") .. tostring(id) }
+      end,
+      -- a small fixed species list, string-or-number ids and all, so a
+      -- test can build a picker off it without needing 151 real entries.
+      -- `opts.species` overrides it entirely when a test wants specific ids.
+      each = function()
+        local list = opts.species or {
+          { id = 1, name = "MON1", dex = 1 }, { id = 2, name = "MON2", dex = 2 },
+          { id = 3, name = "MON3", dex = 3 }, { id = 4, name = "MON4", dex = 4 },
+          { id = 5, name = "MON5", dex = 5 }, { id = 6, name = "MON6", dex = 6 },
+          { id = 7, name = "MON7", dex = 7 }, { id = 8, name = "MON8", dex = 8 },
+          { id = 9, name = "MON9", dex = 9 },
+        }
+        local i = 0
+        return function()
+          i = i + 1
+          local s = list[i]
+          if not s then return nil end
+          return s.id, { name = s.name, dex = s.dex }
+        end
+      end,
+    } },
+    -- per-mod savefile storage; a test reads t.saved directly to check
+    -- round-tripping, or seeds it before H.load to simulate a prior session
+    save = {
+      get = function(_, key, default)
+        local v = t.saved[key]
+        if v == nil then return default end
+        return v
+      end,
+      set = function(_, key, value) t.saved[key] = value end,
+    },
+    -- the engine's screen-push facade. Recorded rather than simulated: this
+    -- mod's picker degrades cleanly with no push at all, so a test only
+    -- needs to see that push was attempted with a sane id and item list.
+    ui = {
+      push = function(game, id, ...)
+        t.pushes[#t.pushes + 1] = { id = id, game = game, args = table.pack(...) }
+      end,
+    },
   }
 
   t.cell = { x = 3, y = 4 }
@@ -227,6 +279,9 @@ function H.load(opts)
   end
   function t.run(ctx)
     return bus:call("battle.run", function() return "vanilla" end, ctx or {})
+  end
+  function t.music(vol, ctx)
+    return bus:call("music.volume", function(v) return v end, vol, ctx)
   end
   function t.emit(name, payload)
     local handler = t.events[name]

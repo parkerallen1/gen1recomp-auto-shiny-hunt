@@ -578,6 +578,481 @@ do
   t.emit("battle.ended", {})
 end
 
+-- ------------------------------------------------------------- FOCUS --
+
+section("FOCUS timer options")
+do
+  local t = H.load()
+  local minutes
+  for _, row in ipairs(t.schema) do if row.key == "focus_minutes" then minutes = row end end
+  ok(minutes and minutes.type == "number", "FOCUS LENGTH is a number option")
+  ok(minutes and minutes.default == 25, "FOCUS LENGTH defaults to 25")
+  ok(minutes and minutes.min == 5 and minutes.max == 60 and minutes.step == 5,
+    "FOCUS LENGTH runs 5 to 60 in steps of 5")
+  ok(minutes and (minutes.max - minutes.min) % minutes.step == 0,
+    "the range divides evenly by the step")
+  ok(minutes and minutes.choices == nil, "FOCUS LENGTH has no choices -- it is a number widget")
+
+  local chipOpt
+  for _, row in ipairs(t.schema) do if row.key == "focus_chip" then chipOpt = row end end
+  ok(chipOpt and chipOpt.type == "toggle" and chipOpt.default == false,
+    "FOCUS TIMER chip is off by default")
+end
+
+section("FOCUS countdown is wall-clock")
+do
+  local t = H.load()
+  t.options.enabled = true
+  rec.clock = 2000
+  t.cell = { x = 1, y = 1 }
+  t.state.focus.active = true
+  t.state.focus.startedAt = rec.clock
+  t.state.focus.lengthSec = 1500 -- 25 minutes
+
+  -- park the hunt clock the ordinary way -- a menu over the overworld,
+  -- nothing walking, no battle -- and prove the countdown does not care
+  t.emit("screen.pushed", { state = { isOverworld = false } })
+  local elapsedBefore = t.state.elapsedBase
+
+  rec.clock = rec.clock + 600
+  t.step(H.game(1))
+
+  rec.reset()
+  t.hud(H.viewport(800, 600))
+  local timer
+  for _, p in ipairs(rec.prints) do
+    if p.text:match("^%d+:%d%d$") then timer = p.text end
+  end
+  ok(timer == "15:00", "the countdown fell by the full 600s parked (got " .. tostring(timer) .. ")")
+  ok(t.state.elapsedBase == elapsedBefore,
+    "the count-up clock stayed parked the whole time -- the two clocks are independent")
+
+  -- run it out entirely while still parked
+  rec.clock = rec.clock + 900
+  t.step(H.game(1))
+  ok(not t.state.focus.active, "the session ends at zero even while parked")
+  t.emit("screen.popped", { state = { isOverworld = false } })
+end
+
+section("FOCUS hides the screen")
+do
+  local t = H.load()
+  t.state.focus.active = true
+  t.state.focus.startedAt = rec.clock or 1000
+  t.state.focus.lengthSec = 1500
+
+  for _, wh in ipairs(SIZES) do
+    rec.reset()
+    local blits = 0
+    local took = t.compose(H.composeCtx(wh[1], wh[2]),
+      { blitCanvas = function() blits = blits + 1 end })
+    ok(took == true, ("FOCUS takes the composite at %dx%d"):format(wh[1], wh[2]))
+    ok(rec.draws == 0 and blits == 0,
+      ("no game pixel is drawn or blitted at %dx%d"):format(wh[1], wh[2]))
+  end
+
+  t.options.show_hud = false
+  ok(t.compose(H.composeCtx(800, 600)) == true, "SHOW HUD off still covers the screen")
+  t.options.show_hud = true
+
+  t.state.hudMode = "full"
+  ok(t.compose(H.composeCtx(800, 600)) == true, "full HUD mode does not leak the PiP either")
+end
+
+section("FOCUS mutes music and suppresses the shiny pulse")
+do
+  local t = H.load()
+  t.options.enabled = true
+  t.options.flash = true
+
+  ok(t.music(7, {}) == 7, "music plays at its normal volume with no session running")
+
+  t.state.focus.active = true
+  t.state.focus.startedAt = rec.clock or 1000
+  t.state.focus.lengthSec = 1500
+  ok(t.music(7, {}) == 0, "music is muted while a session is live")
+
+  t.state.shinyUp = true
+  rec.reset()
+  t.overlay({})
+  ok(#rec.rects == 0, "the shiny pulse is suppressed while a session is live")
+
+  t.state.focus.active = false
+  ok(t.music(7, {}) == 7, "music returns to normal the moment the session ends")
+  rec.reset()
+  t.overlay({})
+  ok(#rec.rects == 1, "the pulse resumes on its own once the session is over")
+end
+
+section("FOCUS result blackout")
+do
+  -- the important one: drive the same scripted timeline twice, once with a
+  -- shiny and once with a common, and prove every observable is identical
+  local function runTimeline(dvs)
+    local t = H.load()
+    t.options.enabled = true
+    rec.clock = 5000
+    t.cell = { x = 2, y = 2 }
+    t.state.focus.active = true
+    t.state.focus.startedAt = rec.clock
+    t.state.focus.lengthSec = 300
+    t.step(H.game(1)); t.step(H.game(1)) -- let the shuffle actually start walking
+
+    rec.clock = rec.clock + 30
+    t.emit("screen.pushed", { state = { isOverworld = false } })
+    t.emit("battle.started", H.wildEvent(dvs, 7))
+    t.step(H.game(1))
+
+    rec.reset()
+    t.hud(H.viewport(800, 600))
+    local transcript = {}
+    for _, p in ipairs(rec.prints) do transcript[#transcript + 1] = p.text end
+
+    -- the peek must add nothing that depends on the find either
+    t.tap("focus_peek")
+    rec.reset()
+    t.hud(H.viewport(800, 600))
+    for _, p in ipairs(rec.prints) do transcript[#transcript + 1] = "PEEK:" .. p.text end
+
+    return transcript
+  end
+
+  rec.vibrates = 0
+  local shinyLines = runTimeline(H.SHINY_DVS)
+  local shinyVibes = rec.vibrates
+  rec.vibrates = 0
+  local commonLines = runTimeline(H.COMMON_DVS)
+  local commonVibes = rec.vibrates
+
+  ok(#shinyLines == #commonLines and #shinyLines > 0,
+    "both runs draw the same number of lines")
+  local diff
+  for i = 1, math.max(#shinyLines, #commonLines) do
+    if shinyLines[i] ~= commonLines[i] then diff = diff or i end
+  end
+  ok(not diff, "a found shiny and a common draw byte-identical HUD text" ..
+    (diff and (' -- line %d: "%s" vs "%s"'):format(
+      diff, tostring(shinyLines[diff]), tostring(commonLines[diff])) or ""))
+
+  ok(shinyVibes == 0, "no vibrate reaches the device while a found session is still live")
+  ok(commonVibes == 0, "(and obviously not for a common either)")
+
+  -- the literal status tag, not just the substring -- "TARGETS: ANY SHINY"
+  -- on the static session card also contains "SHINY" and is not a leak
+  local shinyTag, commonTag
+  for _, l in ipairs(shinyLines) do if l == "SHINY!" or l == "PEEK:SHINY!" then shinyTag = true end end
+  for _, l in ipairs(commonLines) do if l == "SHINY!" or l == "PEEK:SHINY!" then commonTag = true end end
+  ok(not shinyTag and not commonTag, "the SHINY! tag never reaches the screen mid-session")
+end
+
+section("FOCUS early exit")
+do
+  local function driveToConfirm(withShiny)
+    local t = H.load()
+    t.options.enabled = true
+    t.state.focus.active = true
+    t.state.focus.startedAt = rec.clock or 1000
+    t.state.focus.lengthSec = 1500
+    local fled = false
+    if withShiny then
+      t.emit("battle.started", { kind = "wild",
+        battle = { enemy = { mon = { species = 3, dvs = H.SHINY_DVS } },
+                   tryRun = function() fled = true end } })
+    end
+    t.hud(H.viewport(800, 600))
+    t.tap("focus_end")
+    rec.reset()
+    t.hud(H.viewport(800, 600))
+    local lines = {}
+    for _, p in ipairs(rec.prints) do lines[#lines + 1] = p.text end
+    return t, lines, function() return fled end
+  end
+
+  local _, withLines = driveToConfirm(true)
+  local _, withoutLines = driveToConfirm(false)
+  ok(#withLines == #withoutLines and #withLines > 0,
+    "the confirm panel draws the same number of lines either way")
+  local diff
+  for i = 1, math.max(#withLines, #withoutLines) do
+    if withLines[i] ~= withoutLines[i] then diff = diff or i end
+  end
+  ok(not diff, "the END warning text is identical whether or not a shiny is waiting")
+
+  local t, _, wasFled = driveToConfirm(true)
+  ok(not wasFled(), "nothing runs from the battle on the first tap")
+  ok(t.tap("confirm_cancel"), "STAY is reachable")
+  ok(t.state.focus.confirm == nil, "STAY dismisses the confirm")
+  ok(t.state.focus.active, "STAY leaves the session running")
+  ok(not wasFled(), "STAY still has not touched the battle")
+
+  t.hud(H.viewport(800, 600))
+  ok(t.tap("focus_end"), "END is reachable again after STAY")
+  t.hud(H.viewport(800, 600))
+  ok(t.tap("confirm_ok"), "END NOW is reachable")
+  ok(wasFled(), "END NOW runs from the open battle")
+  ok(not t.state.focus.active, "END NOW ends the session")
+  ok(t.state.focus.summary and t.state.focus.summary.reason == "early",
+    "the summary records an early ending")
+
+  -- a trainer/Safari battle must never be run from -- exactly the rule
+  -- every other flee path in this file already follows
+  local t2 = H.load()
+  t2.options.enabled = true
+  t2.state.focus.active = true
+  t2.state.focus.startedAt = rec.clock or 1000
+  t2.state.focus.lengthSec = 1500
+  local trainerFled = false
+  t2.emit("battle.started", { kind = "trainer",
+    battle = { enemy = { mon = { species = 3 } },
+               tryRun = function() trainerFled = true end } })
+  t2.hud(H.viewport(800, 600))
+  t2.tap("focus_end")
+  t2.hud(H.viewport(800, 600))
+  t2.tap("confirm_ok")
+  ok(not trainerFled, "END NOW never runs from a trainer battle")
+  ok(not t2.state.focus.active, "the session still ends even though nothing was fled")
+end
+
+section("FOCUS covers input, not just video")
+do
+  local t = H.load()
+  t.state.focus.active = true
+  t.state.focus.startedAt = rec.clock or 1000
+  t.state.focus.lengthSec = 1500
+
+  local function probe(id)
+    local reached = false
+    t.bus:call("input.pointer", function() reached = true; return false end,
+      {}, { phase = "pressed", id = id, x = 5, y = 5 })
+    return reached
+  end
+
+  -- during the END confirm, only the two buttons are registered -- most of
+  -- the screen has no target at all, and a miss there must still be
+  -- swallowed rather than fall through to the hidden battle underneath
+  t.state.focus.confirm = "end"
+  t.hud(H.viewport(800, 600))
+  ok(not probe("p1"), "a miss during the end-confirm never reaches the game")
+  t.state.focus.confirm = nil
+
+  -- likewise the ~4s peek window only registers the END chip
+  t.state.focus.peekUntil = (rec.clock or 1000) + 100
+  t.hud(H.viewport(800, 600))
+  ok(not probe("p2"), "a miss during the peek window never reaches the game")
+  t.state.focus.peekUntil = 0
+
+  -- but the game is genuinely visible during the offer/summary states, so
+  -- a miss there behaves exactly like a miss on the ordinary HUD: it passes
+  -- through, since there is nothing underneath left to protect
+  t.state.focus.active = false
+  t.state.focus.confirm = "offer"
+  t.hud(H.viewport(800, 600))
+  ok(probe("p3"), "a miss while only the offer panel is up still reaches the game")
+end
+
+section("FOCUS targets")
+do
+  local t = H.load()
+  t.options.enabled = true
+
+  -- empty target set: any shiny is held, matching the pre-targeting behaviour
+  local fled = false
+  t.emit("battle.started", { kind = "wild",
+    battle = { enemy = { mon = { species = 4, dvs = H.SHINY_DVS } },
+               tryRun = function() fled = true end } })
+  ok(not fled and t.state.shinyUp, "an empty target set still holds any shiny")
+  t.emit("battle.ended", {})
+
+  -- a target set that does not include the species: fled, not caught
+  t.saved.focus_targets = { "9" }
+  t.state.targets = nil -- force isTarget to reload from mod.save
+  fled = false
+  t.emit("battle.started", { kind = "wild",
+    battle = { enemy = { mon = { species = 4, dvs = H.SHINY_DVS } },
+               tryRun = function() fled = true end } })
+  ok(fled and not t.state.shinyUp, "a shiny outside the target set is fled")
+  t.emit("battle.ended", {})
+
+  -- during a session an off-target shiny is also counted as skipped
+  t.state.focus.active = true
+  t.state.focus.skipped = 0
+  fled = false
+  t.emit("battle.started", { kind = "wild",
+    battle = { enemy = { mon = { species = 4, dvs = H.SHINY_DVS } },
+               tryRun = function() fled = true end } })
+  ok(fled and t.state.focus.skipped == 1,
+    "an off-target shiny during a session is counted as skipped")
+  t.emit("battle.ended", {})
+  t.state.focus.active = false
+
+  -- with the species in the target set, it is held
+  t.saved.focus_targets = { "4" }
+  t.state.targets = nil
+  fled = false
+  t.emit("battle.started", { kind = "wild",
+    battle = { enemy = { mon = { species = 4, dvs = H.SHINY_DVS } },
+               tryRun = function() fled = true end } })
+  ok(not fled and t.state.shinyUp, "a targeted shiny is held")
+  t.emit("battle.ended", {})
+
+  -- the picker itself: pushed via mod.ui, toggled in place with no re-push
+  -- (onChoose does not pop the screen), and persisted through mod.save
+  t.state.targets = nil
+  t.saved.focus_targets = nil
+  t.options.focus_chip = true
+
+  t.hud(H.viewport(800, 600))
+  ok(t.tap("focus_offer"), "the FOCUS chip opens the offer panel")
+  ok(t.state.focus.confirm == "offer", "tapping FOCUS offers a session, does not start one")
+
+  t.hud(H.viewport(800, 600))
+  ok(t.tap("focus_targets_btn"), "TARGETS is reachable from the offer panel")
+  local push = t.pushes[#t.pushes]
+  ok(push and push.id == "ListMenu", "opening TARGETS pushes the ListMenu screen by module name")
+
+  local rows, opts = push.args[2], push.args[3]
+  local onChoose = opts.onChoose
+  local target
+  for _, row in ipairs(rows) do if row.id == "4" then target = row end end
+  ok(target and target.right == "", "an unpicked species starts unchecked")
+
+  onChoose(target, { items = rows })
+  ok(target.right == "X", "picking it checks it in place, no re-push")
+  ok(t.saved.focus_targets and #t.saved.focus_targets == 1
+     and t.saved.focus_targets[1] == "4",
+     "picking a species persists it through mod.save immediately")
+
+  onChoose(target, { items = rows })
+  ok(target.right == "", "picking it again unchecks it")
+  ok(#t.saved.focus_targets == 0, "unpicking it removes it from the saved list")
+
+  onChoose(target, { items = rows }) -- pick it again before testing CLEAR ALL
+  onChoose(rows[2], { items = rows }) -- rows[2] is "-- CLEAR ALL --"
+  ok(target.right == "", "CLEAR ALL blanks every row's checkmark in place")
+  ok(#t.saved.focus_targets == 0, "CLEAR ALL empties the saved list")
+end
+
+section("FOCUS reveal")
+do
+  local t = H.load()
+  t.options.enabled = true
+  t.state.hudMode = "normal"
+  rec.clock = 9000
+  t.state.focus.active = true
+  t.state.focus.startedAt = rec.clock
+  t.state.focus.lengthSec = 60
+  t.state.totalEncounters = 5
+  t.state.focus.encAt0 = 5
+
+  t.emit("battle.started", H.wildEvent(H.SHINY_DVS, 6))
+  ok(t.state.focus.heldShiny, "the shiny is held going into the reveal")
+  t.emit("battle.ended", {})
+
+  ok(t.compose(H.composeCtx(800, 600)) == true, "still covered right up to zero")
+  rec.vibrates = 0
+  rec.clock = rec.clock + 61
+  t.step(H.game(1))
+
+  ok(not t.state.focus.active, "the session has ended")
+  ok(t.compose(H.composeCtx(800, 600)) ~= true, "the game is back on screen at zero")
+  ok(rec.vibrates == 1, "exactly the one owed alert fires, and only now")
+
+  local summary = t.state.focus.summary
+  ok(summary and summary.reason == "done", "the summary records a completed session")
+  ok(summary and summary.shiny == true, "the summary reports the find")
+  ok(summary and summary.encounters == 1,
+    "the summary reports the encounter delta, not the lifetime total")
+  ok(t.state.hudMode == "normal", "the HUD mode from before the session is unchanged")
+
+  rec.reset()
+  t.hud(H.viewport(800, 600))
+  local sawTitle
+  for _, p in ipairs(rec.prints) do
+    if p.text:match("^FOCUS COMPLETE") then sawTitle = true end
+  end
+  ok(sawTitle, "the summary panel draws its title")
+
+  ok(t.tap("focus_dismiss"), "OK dismisses the summary")
+  ok(t.state.focus.summary == nil, "dismissing clears the summary")
+end
+
+section("FOCUS keeps the screen awake while parked")
+do
+  local original = love.window.setDisplaySleepEnabled
+  local calls = 0
+  love.window.setDisplaySleepEnabled = function(v) if v == false then calls = calls + 1 end end
+
+  local t = H.load()
+  -- AUTO HUNT off: the ordinary KEEP SCREEN AWAKE apply's own early return
+  -- never even runs, so a call here can only have come from focusTick
+  t.options.enabled = false
+  t.state.focus.active = true
+  t.state.focus.startedAt = rec.clock or 1000
+  t.state.focus.lengthSec = 1500
+  t.step(H.game(1))
+  ok(calls >= 1, "the device is kept awake during a session even with AUTO HUNT off")
+
+  love.window.setDisplaySleepEnabled = original
+end
+
+section("FOCUS HUD draws at every size, on screen")
+do
+  local t = H.load()
+  t.options.enabled = true
+  t.state.focus.active = true
+  t.state.focus.startedAt = rec.clock or 1000
+  t.state.focus.lengthSec = 1500
+
+  local function checkOnScreen(label, W, Ht)
+    local off
+    for _, p in ipairs(rec.prints) do
+      if p.x < 0 or p.y < 0 or p.x + p.w > W + 1 or p.y + p.h > Ht + 1 then
+        off = off or ("%q at %d,%d"):format(p.text, p.x, p.y)
+      end
+    end
+    ok(not off, ("%s at %dx%d keeps every line on screen%s")
+      :format(label, W, Ht, off and (" -- " .. off) or ""))
+  end
+
+  for _, wh in ipairs(SIZES) do
+    local W, Ht = wh[1], wh[2]
+    rec.reset()
+    run(("FOCUS countdown draws at %dx%d"):format(W, Ht), function()
+      t.compose(H.composeCtx(W, Ht))
+      t.hud(H.viewport(W, Ht))
+    end)
+    checkOnScreen("FOCUS countdown", W, Ht)
+  end
+
+  t.state.focus.confirm = "end"
+  for _, wh in ipairs(SIZES) do
+    local W, Ht = wh[1], wh[2]
+    rec.reset()
+    run(("FOCUS end-confirm draws at %dx%d"):format(W, Ht), function() t.hud(H.viewport(W, Ht)) end)
+    checkOnScreen("FOCUS end-confirm", W, Ht)
+  end
+  t.state.focus.confirm = nil
+
+  t.state.focus.active = false
+  t.state.focus.confirm = "offer"
+  for _, wh in ipairs(SIZES) do
+    local W, Ht = wh[1], wh[2]
+    rec.reset()
+    run(("FOCUS offer draws at %dx%d"):format(W, Ht), function() t.hud(H.viewport(W, Ht)) end)
+    checkOnScreen("FOCUS offer", W, Ht)
+  end
+  t.state.focus.confirm = nil
+
+  t.state.focus.summary =
+    { reason = "early", seconds = 42, encounters = 9, shiny = false, skipped = 2 }
+  for _, wh in ipairs(SIZES) do
+    local W, Ht = wh[1], wh[2]
+    rec.reset()
+    run(("FOCUS summary draws at %dx%d"):format(W, Ht), function() t.hud(H.viewport(W, Ht)) end)
+    checkOnScreen("FOCUS summary", W, Ht)
+  end
+end
+
 print(("\n%d checks, %s"):format(checks,
   failures == 0 and "all good" or (failures .. " FAILED")))
 os.exit(failures == 0 and 0 or 1)

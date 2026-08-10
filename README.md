@@ -15,8 +15,8 @@ wild Pokemon actually ends up with, however they got there.
 
 ## Setup
 
-1. Install this mod (see `docs/launcher.md` / the in-game mod importer for
-   how to load a mod `.zip` on your device -- no rebuild needed).
+1. Install this mod (see the in-game mod importer for how to load a mod
+   `.zip` on your device -- no rebuild needed).
 2. Walk your character to a spot with an open tile on two opposite sides
    (e.g. grass to the north, a path tile to the south). Face either
    direction.
@@ -26,7 +26,7 @@ wild Pokemon actually ends up with, however they got there.
      where you're standing (defaults to UP/DOWN).
    - Leave **KEEP SCREEN AWAKE** on so the app doesn't get paused by the
      device sleeping. Plug the phone in -- this runs indefinitely.
-   - **SPEED CAP** is 4X unless you pick a tighter one; see below.
+   - **SPEED CAP** is 10X unless you pick a tighter one; see below.
 4. Leave the phone. Every wild battle either resolves itself in a second
    or two (non-shiny) or stops and sits there (shiny) until you pick the
    phone back up.
@@ -92,6 +92,56 @@ them with a tap (or a mouse click on desktop):
 - Taps that miss the HUD go to the game as normal, and the on-screen
   controls always get first refusal, so the HUD can never eat a d-pad press.
 
+## Focus timer
+
+A fixed-length hunting session for when you want the phone to hunt while you
+do something else, without the temptation to keep checking on it. Turn on
+**FOCUS TIMER** in the mod's settings to add a **F** chip to the corner HUD
+(**normal** size only -- switch out of `full` to reach it), then tap it,
+pick a length from 5 to 60 minutes in **FOCUS LENGTH**, and tap **START**.
+
+While a session is running:
+
+- **The screen is covered.** No game, no HUD, nothing but a countdown and an
+  **END** chip. Tap anywhere else to peek a static card (session length and
+  targets) -- it never shows encounter counts or shiny status, because a
+  parked encounter count would itself give a find away.
+- **Nothing about a find is shown until the countdown reaches zero** -- not
+  a vibrate, not the pulsing border, not the `SHINY!` tag, not even a
+  stalled clock. If it finds what you're hunting partway through, the
+  session still runs its full length and gives no sign. This is deliberate:
+  the point is to know for certain, at the end, without being able to peek
+  the result early by any means -- including tapping END, see below.
+- **Music is muted** for the duration (there is no equivalent hook for
+  battle sound effects, so those are still audible -- see Notes).
+- **Ending it early costs you the find.** The **END** chip asks for
+  confirmation, worded identically whether or not anything is waiting (a
+  warning that only showed up for a real find would itself be the leak),
+  and confirming runs from whatever wild battle is open -- a held shiny
+  included. Tap **STAY** instead to keep the session running.
+
+At zero the screen returns, every suppressed alert fires at once, and a
+summary reports what happened: elapsed time, the encounter count for that
+session (not the lifetime total), whether a target was found, and how many
+off-target shinies were fled (see Targets below). It stays up until you tap
+**OK**.
+
+A session lives only as long as the app does -- it is not saved, and
+restarting the app or reloading the mod ends it with nothing to show.
+
+### Targets
+
+From the offer panel, **TARGETS** opens a scrollable list of every known
+species. Pick one or more to hunt for specifically; pick none and a session
+alerts on any shiny, the mod's normal behaviour.
+
+**A shiny that is not one of your targets is fled, not caught** -- this is
+what makes targeting worth having, but it is irreversible, silent, and the
+one thing in this whole feature that runs against the mod's own promise to
+leave every shiny battle alone. The summary reports how many were skipped
+this way so it is never a total surprise, but there is no undo. Leave the
+target list empty if you are not sure yet.
+
 ## Battery
 
 An unattended hunt with the screen forced awake for hours is going to use
@@ -132,6 +182,22 @@ power regardless. To cut it down:
   tiles. Not this mod's issue, but worth disabling one of them before a
   long hunting session -- also saves the battery it costs to run two of
   them at once.
+- Any tap during a session that misses the FOCUS screen's own targets is
+  swallowed -- it cannot reach the hidden game underneath. The one exception
+  is the on-screen touch controls (d-pad, A/B), which draw over everything
+  and get first refusal on a tap before this mod ever sees it (see the HUD
+  section above): a press landing exactly on one of those, during a session,
+  can still reach a real, hidden battle -- selecting a move, or advancing a
+  text box, with no visual feedback that anything happened. This is a real
+  gap, not just a cosmetic one, and it is not something a mod hook can
+  close. If this worries you, rest your hand off the bottom strip of the
+  screen while a session runs.
+- FOCUS mutes music but has no hook into battle sound effects, so a held
+  shiny's battle sound is still audible if you're close enough to hear it --
+  the mod can only close the leaks the engine gives it a hook for.
+- A FOCUS session lives in memory only. It is not part of the savefile, so
+  quitting the app or reloading mods during one ends it with no summary and
+  nothing recorded.
 
 ## Compatibility
 

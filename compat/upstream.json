@@ -9,14 +9,15 @@
     "battle.ended",
     "battle.run",
     "battle.overlay",
-    "encounter.roll"
+    "encounter.roll",
+    "music.volume"
   ],
   "upstream": [
     {
       "repo": "bryanthaboi/gen1recomp",
       "role": "engine",
       "verified": "v0.1.75",
-      "why": "every hook we wrap, plus GameSpeed.LEVELS and Stats.isShiny"
+      "why": "every hook we wrap, plus GameSpeed.LEVELS, Stats.isShiny, mod.save, mod.ui.push (the ListMenu screen id and its onChoose contract), and mod.content.pokemon:each"
     },
     {
       "repo": "artyrambles/DRAMALESS_SHAPE",

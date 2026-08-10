@@ -47,6 +47,22 @@ local SPEED_CAP_CHOICES = {
 -- this, so it only fires when the way is genuinely blocked
 local MAX_HOLD_SECONDS = 0.9
 
+-- how long a FOCUS peek panel, or the end-early confirm, stays up before it
+-- dismisses itself
+local FOCUS_PEEK_SECONDS = 4
+local FOCUS_CONFIRM_SECONDS = 10
+
+-- Deliberately unconditional and deliberately dull. A warning that read
+-- differently depending on whether something was waiting would announce the
+-- find, which is the one thing a FOCUS session exists to prevent -- so this
+-- mentions running from an open battle every single time, including the
+-- (usual) times there is nothing to run from.
+local FOCUS_END_WARNING = {
+  "END THIS SESSION EARLY?",
+  "THE SESSION IS DISCARDED AND ANY WILD",
+  "BATTLE STILL OPEN WILL BE RUN FROM.",
+}
+
 local function nowReal()
   if love and love.timer and love.timer.getTime then return love.timer.getTime() end
   return os.clock()
@@ -97,6 +113,15 @@ return function(mod)
       help = "Ceiling on GAME SPEED while AUTO HUNT is on, and only while "
         .. "it is on -- 10X at the most. Whatever you had set comes back "
         .. "the moment you turn AUTO HUNT off." },
+    { key = "focus_minutes", type = "number", label = "FOCUS LENGTH", default = 25,
+      min = 5, max = 60, step = 5,
+      help = "How long a FOCUS session runs. The screen is covered for the "
+        .. "whole length and nothing about what it found is shown until it "
+        .. "ends -- including if it ends in the first minute." },
+    { key = "focus_chip", type = "toggle", label = "FOCUS TIMER", default = false,
+      help = "Adds a FOCUS chip to the corner HUD. Tap it to start a "
+        .. "fixed-length session: the screen is covered, a countdown "
+        .. "replaces the clock, and the result is held back until zero." },
   })
 
   local state = {
@@ -128,6 +153,31 @@ return function(mod)
     -- player's own values back
     optionStash = nil, optionCapped = nil,
     overrideStash = nil, overrideCapped = nil,
+    -- the battle currently on screen, kept only so a FOCUS session's early
+    -- exit can run from one it never opened itself. battleKind travels
+    -- with it so that exit can refuse a trainer/Safari battle exactly like
+    -- every other flee path in this file already does.
+    battleRef = nil, battleKind = nil,
+    -- FOCUS target species: lazily loaded from mod.save. nil = not loaded
+    -- yet; an empty table means "any shiny", the pre-FOCUS behaviour
+    targets = nil, speciesIndex = nil,
+    -- a fixed-length hunting session that covers the screen and holds back
+    -- everything it finds until the countdown reaches zero
+    focus = {
+      active = false, startedAt = nil, lengthSec = 0,
+      -- totalEncounters at session start, so the summary can report the
+      -- delta rather than the lifetime total
+      encAt0 = 0,
+      -- a target shiny found during the session. Sticky: survives
+      -- battle.ended so the summary is honest even if the battle ends on
+      -- its own. NEVER read by anything that draws while active is true.
+      heldShiny = false, shinySpecies = nil,
+      -- non-target shinies fled during the session
+      skipped = 0,
+      -- an alert (vibrate) that was suppressed and is owed at reveal
+      pendingVibrate = false,
+      peekUntil = 0, confirm = nil, confirmUntil = 0, summary = nil,
+    },
   }
 
   local function stopWalking()
@@ -164,13 +214,66 @@ return function(mod)
     return tostring(species or "?")
   end
 
+  -- ------------------------------------------------------- FOCUS targets --
+  -- Which species a FOCUS session is hunting. Persisted with mod.save (the
+  -- savefile), since a target list is a property of this playthrough, not a
+  -- global setting -- and mod.options has no write path for the mod anyway.
+  local function targets()
+    if state.targets then return state.targets end
+    local set = {}
+    local ok, saved = pcall(function() return mod.save:get("focus_targets", nil) end)
+    if ok and type(saved) == "table" then
+      for _, id in ipairs(saved) do set[tostring(id)] = true end
+    end
+    state.targets = set
+    return set
+  end
+
+  local function saveTargets()
+    local list = {}
+    for id in pairs(state.targets or {}) do list[#list + 1] = id end
+    table.sort(list)
+    pcall(function() mod.save:set("focus_targets", list) end)
+  end
+
+  -- an empty set means "any shiny" -- the mod's behaviour before targeting
+  -- existed, and what a FOCUS session with nothing picked still gets
+  local function isTarget(species)
+    local set = targets()
+    if next(set) == nil then return true end
+    return set[tostring(species)] == true
+  end
+
+  -- every known species, sorted by dex number, built once and cached. Never
+  -- hardcodes a species count -- mod-added species and a patched dexSize
+  -- both come along for free through :each().
+  local function speciesIndex()
+    if state.speciesIndex then return state.speciesIndex end
+    local list = {}
+    pcall(function()
+      for id, def in mod.content.pokemon:each() do
+        list[#list + 1] = { id = id, name = (def and def.name) or tostring(id),
+          dex = tonumber(def and def.dex) or math.huge }
+      end
+    end)
+    table.sort(list, function(a, b)
+      if a.dex ~= b.dex then return a.dex < b.dex end
+      return tostring(a.id) < tostring(b.id)
+    end)
+    state.speciesIndex = list
+    return list
+  end
+
   mod.events:on("battle.started", function(ev)
     -- set before any of the early returns below: the clock counts every
     -- battle, including the trainer and Safari ones this mod stays out of
     state.inBattle = true
+    state.battleRef = ev.battle
+    state.battleKind = ev.kind
     state.shinyUp = false
+    local species
     if ev.kind == "wild" then
-      local species = ev.battle and ev.battle.enemy and ev.battle.enemy.mon
+      species = ev.battle and ev.battle.enemy and ev.battle.enemy.mon
         and ev.battle.enemy.mon.species
       if species then
         state.totalEncounters = state.totalEncounters + 1
@@ -185,8 +288,24 @@ return function(mod)
     if ev.kind ~= "wild" then return end
     local mon = ev.battle and ev.battle.enemy and ev.battle.enemy.mon
     if isShinyMon(mon) then
+      -- a shiny that is not one of the current targets is treated exactly
+      -- like a common: fled, and counted so the summary can own up to it.
+      if not isTarget(species) then
+        if state.focus.active then state.focus.skipped = state.focus.skipped + 1 end
+        state.fleeing = true
+        state.autoRunArmed = true
+        ev.battle:tryRun()
+        return
+      end
       state.shinyUp = true
-      if mod.options:get("vibrate") and love.system and love.system.vibrate then
+      if state.focus.active then
+        -- Result blackout: the find is recorded and nothing else happens.
+        -- No vibrate, no tag reaching the screen, no pulse -- the alert is
+        -- owed and paid when the session reveals.
+        state.focus.heldShiny = true
+        state.focus.shinySpecies = state.focus.shinySpecies or species
+        state.focus.pendingVibrate = true
+      elseif mod.options:get("vibrate") and love.system and love.system.vibrate then
         pcall(love.system.vibrate, 1.0)
       end
       return
@@ -204,6 +323,11 @@ return function(mod)
     state.autoRunArmed = false
     state.shinyUp = false
     state.inBattle = false
+    state.battleRef = nil
+    state.battleKind = nil
+    -- state.focus.heldShiny is deliberately NOT cleared here: it is sticky
+    -- so the end-of-session summary still reports a find whose battle
+    -- somehow ended on its own.
   end)
 
   -- only forces success for the flee *this mod* triggers above -- a
@@ -219,7 +343,12 @@ return function(mod)
 
   mod.hooks:wrap("battle.overlay", function(next, battle)
     next(battle)
-    if state.shinyUp and mod.options:get("flash") then
+    -- suppressed during a FOCUS session -- this would otherwise reach the
+    -- screen through the compose takeover's own PiP/UI canvas blits, which
+    -- this mod's cover never draws, so it is currently unreachable in
+    -- practice too. Kept explicit for a peer mod that composites the game
+    -- some other way.
+    if state.shinyUp and mod.options:get("flash") and not state.focus.active then
       local t = nowReal()
       local pulse = 0.5 + 0.5 * math.sin(t * 6)
       love.graphics.setColor(1, 1, 0, 0.35 * pulse)
@@ -228,10 +357,178 @@ return function(mod)
     end
   end)
 
+  -- Muting music during a session closes an audio leak: a parked shiny
+  -- loops the battle theme forever, audibly different from a session that
+  -- cycles overworld music normally. music.volume is re-applied every frame
+  -- while any mod wraps it, so returning 0 here is enough on its own -- and
+  -- muting is exactly what a focus block wants anyway. There is no
+  -- equivalent hook for battle SFX; that residual leak is documented, not
+  -- hidden.
+  mod.hooks:wrap("music.volume", function(next, vol, ctx)
+    if state.focus.active then return 0 end
+    return next(vol, ctx)
+  end)
+
   local function elapsedRealSeconds()
     local total = state.elapsedBase
     if state.resumedAt then total = total + (nowReal() - state.resumedAt) end
     return total
+  end
+
+  -- -------------------------------------------------------------- FOCUS --
+  -- A fixed-length hunting session that covers the screen and holds back
+  -- everything it finds until the countdown reaches zero. See the option
+  -- rows above and drawFocus/drawOffer/drawSummary below for the HUD side.
+  local function focusMinutes()
+    local n = tonumber(mod.options:get("focus_minutes")) or 25
+    return math.max(5, math.min(60, n))
+  end
+
+  -- Deliberately NOT elapsedRealSeconds(): that one is gated on
+  -- huntIsRunning, and a parked hunt is exactly what a found shiny causes.
+  -- A countdown that froze the moment something was found would announce
+  -- the find louder than a vibrate. This is raw wall-clock time from the
+  -- moment START was tapped, and nothing -- a menu, a battle, a shiny
+  -- sitting open, AUTO HUNT being switched off -- can slow it down.
+  local function focusRemaining()
+    local f = state.focus
+    if not f.active or not f.startedAt then return 0 end
+    return math.max(0, f.lengthSec - (nowReal() - f.startedAt))
+  end
+
+  local function startFocus()
+    local f = state.focus
+    f.active = true
+    f.startedAt = nowReal()
+    f.lengthSec = focusMinutes() * 60
+    f.encAt0 = state.totalEncounters
+    f.heldShiny, f.shinySpecies, f.skipped = false, nil, 0
+    f.pendingVibrate = false
+    f.peekUntil, f.confirm, f.confirmUntil, f.summary = 0, nil, 0, nil
+  end
+
+  local function endFocus(reason) -- "done" | "early"
+    local f = state.focus
+    f.summary = {
+      reason = reason,
+      seconds = nowReal() - (f.startedAt or nowReal()),
+      encounters = state.totalEncounters - f.encAt0,
+      species = f.shinySpecies,
+      shiny = f.heldShiny,
+      skipped = f.skipped,
+    }
+    -- set first: the very next render.compose falls through and the game
+    -- is back on screen
+    f.active = false
+    f.confirm, f.peekUntil = nil, 0
+    -- the alert that was owed the whole session, paid only if it actually
+    -- ran to completion -- an early exit already flees the find itself
+    if reason == "done" and f.pendingVibrate
+       and mod.options:get("vibrate") and love.system and love.system.vibrate then
+      pcall(love.system.vibrate, 1.0)
+    end
+    f.pendingVibrate = false
+  end
+
+  -- the forced exit behind ending a session early: whatever is on screen
+  -- gets run from, exactly like a common the mod fled on its own. Gated to
+  -- wild the same way every other flee in this file is (main.lua:285) --
+  -- without it, ending early during a trainer/Safari battle would arm a
+  -- run that tryRun() refuses outright, leaving state.fleeing stuck and the
+  -- A-mash below firing into the player's own battle indefinitely.
+  local function fleeHeld()
+    if not (state.inBattle and state.battleRef and state.battleKind == "wild") then return end
+    state.fleeing = true
+    state.autoRunArmed = true
+    pcall(function() state.battleRef:tryRun() end)
+  end
+
+  local function focusTick(game)
+    local f = state.focus
+    if f.confirm == "end" and nowReal() > f.confirmUntil then f.confirm = nil end
+    if not f.active then return end
+    -- keep the device awake unconditionally during a session. The ordinary
+    -- KEEP SCREEN AWAKE apply, further down in the input.step wrap, sits
+    -- behind the hunting-blocked early return in that same wrap -- so a
+    -- parked find would otherwise let the screen sleep, an obvious physical
+    -- tell that something was found.
+    if mod.options:get("keep_awake") and love.window
+       and love.window.setDisplaySleepEnabled then
+      love.window.setDisplaySleepEnabled(false)
+    end
+    if focusRemaining() <= 0 then endFocus("done") end
+  end
+
+  -- push the engine's own scrollable list screen for target species. Fully
+  -- optional: if mod.ui or the screen id is not available, this pcalls out
+  -- quietly and the feature degrades to "empty set = any shiny".
+  local function openPicker(game)
+    local rows = {
+      { label = "-- DONE --", id = "__done" },
+      { label = "-- CLEAR ALL --", id = "__clear" },
+    }
+    for _, s in ipairs(speciesIndex()) do
+      rows[#rows + 1] = {
+        label = s.name, right = targets()[tostring(s.id)] and "X" or "",
+        id = tostring(s.id),
+      }
+    end
+    local function onChoose(item, menu)
+      if item.id == "__done" then
+        if menu.close then menu:close() end
+        return
+      end
+      if item.id == "__clear" then
+        state.targets = {}
+        saveTargets()
+        for _, row in ipairs(menu.items or {}) do
+          if row.id ~= "__done" and row.id ~= "__clear" then row.right = "" end
+        end
+        return
+      end
+      local set = targets()
+      set[item.id] = (not set[item.id]) or nil
+      saveTargets()
+      -- onChoose does not pop the screen, so mutate the row in place --
+      -- menu.items holds the exact tables these rows are, no re-push needed
+      item.right = set[item.id] and "X" or ""
+    end
+    pcall(function()
+      mod.ui.push(game, "ListMenu", "FOCUS TARGETS", rows, {
+        onChoose = onChoose, wrap = true, pageJump = true, keyRepeat = true,
+        footer = "A SHINY THAT ISN'T PICKED IS FLED, NOT CAUGHT",
+      })
+    end)
+  end
+
+  local function targetsSummaryText()
+    local set = targets()
+    local n = 0
+    for _ in pairs(set) do n = n + 1 end
+    if n == 0 then return "TARGETS: ANY SHINY" end
+    return ("TARGETS: %d SPECIES"):format(n)
+  end
+
+  local FOCUS_ACTIONS = {
+    offer = function() state.focus.confirm = "offer" end,
+    start = function() startFocus() end,
+    cancel = function() state.focus.confirm = nil end,
+    peek = function() state.focus.peekUntil = nowReal() + FOCUS_PEEK_SECONDS end,
+    endask = function()
+      state.focus.confirm = "end"
+      state.focus.confirmUntil = nowReal() + FOCUS_CONFIRM_SECONDS
+    end,
+    endnow = function()
+      fleeHeld()
+      endFocus("early")
+    end,
+    dismiss = function() state.focus.summary = nil end,
+    targets = function(game) openPicker(game) end,
+  }
+
+  local function focusAction(name, game)
+    local fn = FOCUS_ACTIONS[name]
+    if fn then fn(game) end
   end
 
   -- ---------------------------------------------------------------- HUD --
@@ -289,8 +586,10 @@ return function(mod)
   end
 
   -- a square tap target with a label, published to state.hitAreas by the
-  -- caller so input.pointer can find it
-  local function chip(areas, id, mode, label, x, y, size)
+  -- caller so input.pointer can find it. `mode` is a HUD size to switch to
+  -- on tap (the pre-FOCUS behaviour); `action` is a FOCUS_ACTIONS name --
+  -- every existing call site passes only `mode`, so this stays untouched.
+  local function chip(areas, id, mode, label, x, y, size, action)
     love.graphics.setColor(0, 0, 0, 0.7)
     love.graphics.rectangle("fill", x, y, size, size, 4, 4)
     love.graphics.setColor(1, 1, 1, 0.5)
@@ -304,7 +603,28 @@ return function(mod)
         math.floor(y + (size - font:getHeight()) / 2))
     end
     love.graphics.setColor(1, 1, 1, 1)
-    areas[#areas + 1] = { id = id, mode = mode, x = x, y = y, w = size, h = size }
+    areas[#areas + 1] = { id = id, mode = mode, action = action, x = x, y = y, w = size, h = size }
+  end
+
+  -- a rectangular tap target with a label -- like chip(), but not
+  -- constrained to a square, for FOCUS's wider buttons (START, CANCEL, ...)
+  local function button(areas, id, label, x, y, w, h, action)
+    love.graphics.setColor(0, 0, 0, 0.7)
+    love.graphics.rectangle("fill", x, y, w, h, 4, 4)
+    love.graphics.setColor(1, 1, 1, 0.5)
+    love.graphics.rectangle("line", x, y, w, h, 4, 4)
+    local font = fontAt(h * 0.55)
+    if font then
+      printAt(label, font, x + (w - font:getWidth(label)) / 2,
+        y + (h - font:getHeight()) / 2, 0.95)
+    end
+    areas[#areas + 1] = { id = id, action = action, x = x, y = y, w = w, h = h }
+  end
+
+  -- x offset that centers `text` (at `font`'s width) inside a span of `width`
+  local function centeredX(font, text, width)
+    local w = font and font:getWidth(text) or 0
+    return math.floor((width - w) / 2)
   end
 
   local function speciesRows()
@@ -383,8 +703,15 @@ return function(mod)
       rowText[#rowText + 1] = ("+%d more"):format(#rows - shown)
     end
 
+    -- the FOCUS entry chip only shows up when the option is on and there is
+    -- no session/offer/summary already occupying the screen -- one way in,
+    -- and never a second target stacked under something else
+    local showFocusChip = mod.options:get("focus_chip") and not state.focus.active
+      and not state.focus.summary and not state.focus.confirm
+
     local function widthOf(font, text) return font and font:getWidth(text) or 0 end
-    local topW = widthOf(tagFont, tag) + pad + chipSize * 2 + pad
+    local topW = widthOf(tagFont, tag) + pad
+      + chipSize * (showFocusChip and 3 or 2) + pad
     local bodyW = math.max(widthOf(timerFont, timer), widthOf(countFont, count))
     for _, text in ipairs(rowText) do
       bodyW = math.max(bodyW, widthOf(rowFont, text))
@@ -406,6 +733,10 @@ return function(mod)
     printAt(tag, tagFont,
       x + pad, cy + (chipSize - (tagFont and tagFont:getHeight() or 10)) / 2,
       0.8, 1, 1, state.shinyUp and 0.25 or 1)
+    if showFocusChip then
+      chip(areas, "focus_offer", nil, "F",
+        x + w - pad - chipSize * 3 - 8, cy, chipSize, "offer")
+    end
     chip(areas, "shrink", "mini", "-", x + w - pad - chipSize * 2 - 4, cy, chipSize)
     chip(areas, "grow", "full", "+", x + w - pad - chipSize, cy, chipSize)
     cy = cy + chipSize
@@ -502,10 +833,178 @@ return function(mod)
     end
   end
 
+  -- ------------------------------------------------------------- FOCUS UI --
+  -- The offer panel (before a session starts), the countdown itself, and a
+  -- generic two-button confirm, all layered as overlays over whatever the
+  -- normal HUD is already drawing -- reusing panel/printAt/chip/button
+  -- rather than a parallel draw stack.
+
+  -- a centered "are you sure" prompt: `lines` of text, then two buttons.
+  -- Reused by FOCUS's END confirm; deliberately takes no branch on content,
+  -- so a caller that always passes the same `lines` (as the END warning
+  -- does) draws a byte-identical panel every time.
+  local function drawConfirmPanel(vp, areas, lines, okLabel, okAction, cancelLabel, cancelAction)
+    local ref = math.min(vp.width, vp.height)
+    local font = fontAt(math.max(12, ref * 0.032))
+    local pad = math.max(8, math.floor(ref * 0.02))
+    local lineH = (font and font:getHeight() or 16) + 4
+    local btnH = math.floor(ref * 0.075)
+    local w = math.min(vp.width - pad * 2, math.floor(vp.width * 0.86))
+    local h = pad * 2 + lineH * #lines + math.floor(pad * 0.8) + btnH
+    local x = math.floor((vp.width - w) / 2)
+    local y = math.floor((vp.height - h) / 2)
+    panel(x, y, w, h, 0.88)
+    local cy = y + pad
+    for _, line in ipairs(lines) do
+      printAt(line, font, x + centeredX(font, line, w), cy, 0.95)
+      cy = cy + lineH
+    end
+    cy = cy + math.floor(pad * 0.8)
+    local half = math.floor((w - pad * 3) / 2)
+    button(areas, "confirm_ok", okLabel, x + pad, cy, half, btnH, okAction)
+    button(areas, "confirm_cancel", cancelLabel, x + pad * 2 + half, cy, half, btnH, cancelAction)
+  end
+
+  local function drawOffer(vp, areas)
+    local ref = math.min(vp.width, vp.height)
+    local titleFont = fontAt(math.max(14, ref * 0.04))
+    local lineFont = fontAt(math.max(11, ref * 0.028))
+    local pad = math.max(8, math.floor(ref * 0.02))
+
+    local title = "FOCUS TIMER"
+    local lines = { ("FOCUS: %d MIN"):format(focusMinutes()), targetsSummaryText() }
+    if not mod.options:get("enabled") then
+      lines[#lines + 1] = "AUTO HUNT IS OFF -- NOTHING WILL BE HUNTED"
+    end
+
+    local lineH = (lineFont and lineFont:getHeight() or 14) + 4
+    local titleH = titleFont and titleFont:getHeight() or 18
+    local btnH = math.floor(ref * 0.075)
+    local w = math.min(vp.width - pad * 2, math.floor(vp.width * 0.86))
+    local h = pad * 2 + titleH + math.floor(pad * 0.6) + lineH * #lines
+      + math.floor(pad * 0.8) + btnH * 2 + math.floor(pad * 0.4)
+
+    local x = math.floor((vp.width - w) / 2)
+    local y = math.floor((vp.height - h) / 2)
+    panel(x, y, w, h, 0.85)
+
+    local cy = y + pad
+    printAt(title, titleFont, x + centeredX(titleFont, title, w), cy, 1)
+    cy = cy + titleH + math.floor(pad * 0.6)
+    for _, line in ipairs(lines) do
+      printAt(line, lineFont, x + pad, cy, 0.9)
+      cy = cy + lineH
+    end
+    cy = cy + math.floor(pad * 0.8)
+
+    button(areas, "focus_targets_btn", "TARGETS", x + pad, cy, w - pad * 2, btnH, "targets")
+    cy = cy + btnH + math.floor(pad * 0.4)
+    local half = math.floor((w - pad * 3) / 2)
+    button(areas, "focus_start", "START", x + pad, cy, half, btnH, "start")
+    button(areas, "focus_cancel", "CANCEL", x + pad * 2 + half, cy, half, btnH, "cancel")
+  end
+
+  -- The countdown screen itself. Nothing here reads state.shinyUp, and that
+  -- is the whole point: statusText()/drawMini/drawNormal/drawFull, the only
+  -- places SHINY! or the pulse can reach the screen, are simply never
+  -- called while a session is active -- this function is dispatched to
+  -- instead, so the guarantee comes from render.hud's dispatch order, not a
+  -- conditional buried in here.
+  local function drawFocus(vp, areas)
+    local f = state.focus
+    if f.confirm == "end" then
+      drawConfirmPanel(vp, areas, FOCUS_END_WARNING, "END NOW", "endnow", "STAY", "cancel")
+      return
+    end
+
+    local ref = math.min(vp.width, vp.height)
+    -- leave the bottom strip alone: the on-screen d-pad and A/B live there
+    local bottom = vp.height - math.floor(vp.height * 0.16)
+    local labelFont = fontAt(math.max(12, ref * 0.032))
+    local timer = formatElapsed(focusRemaining())
+    local timerFont = fitFont(timer, vp.width * 0.86, math.min(bottom * 0.34, vp.height * 0.3))
+
+    local y = math.floor(bottom * 0.22)
+    printAt("FOCUS", labelFont, centeredX(labelFont, "FOCUS", vp.width), y, 0.6)
+    y = y + (labelFont and labelFont:getHeight() or 16) + math.floor(ref * 0.02)
+    printAt(timer, timerFont, centeredX(timerFont, timer, vp.width), y, 1)
+
+    local m = math.max(8, math.floor(ref * 0.02))
+    local chipSize = math.max(28, math.floor(ref * 0.07))
+    chip(areas, "focus_end", nil, "END", vp.width - chipSize - m, m, chipSize, "endask")
+
+    if nowReal() < f.peekUntil then
+      -- the static session card: length and targets, never anything that
+      -- moves in response to a find (see targetsSummaryText/session length)
+      local lineFont = fontAt(math.max(11, ref * 0.026))
+      local lines = {
+        ("SESSION  %s / %s"):format(
+          formatElapsed(nowReal() - (f.startedAt or nowReal())), formatElapsed(f.lengthSec)),
+        targetsSummaryText(),
+      }
+      local pad = math.max(8, math.floor(ref * 0.02))
+      local lineH = (lineFont and lineFont:getHeight() or 14) + 4
+      local w = math.min(vp.width - pad * 2, math.floor(vp.width * 0.8))
+      local h = pad * 2 + lineH * #lines
+      local px = math.floor((vp.width - w) / 2)
+      local py = bottom - h - m
+      panel(px, py, w, h, 0.75)
+      local cy = py + pad
+      for _, line in ipairs(lines) do
+        printAt(line, lineFont, px + centeredX(lineFont, line, w), cy, 0.85)
+        cy = cy + lineH
+      end
+    else
+      -- one big invisible target: tapping anywhere above the d-pad strip
+      -- (that isn't the END chip, pushed first above) peeks the session card
+      areas[#areas + 1] =
+        { id = "focus_peek", action = "peek", x = 0, y = 0, w = vp.width, h = bottom }
+    end
+  end
+
+  local function drawSummary(vp, areas)
+    local f = state.focus
+    local s = f.summary
+    if not s then return end
+    local ref = math.min(vp.width, vp.height)
+    local titleFont = fontAt(math.max(14, ref * 0.036))
+    local lineFont = fontAt(math.max(11, ref * 0.028))
+    local pad = math.max(8, math.floor(ref * 0.02))
+
+    local title = s.reason == "early" and "FOCUS ENDED EARLY" or "FOCUS COMPLETE"
+    local lines = {
+      ("%s   ENCOUNTERS %d"):format(formatElapsed(s.seconds), s.encounters),
+      s.shiny and ("SHINY: %s"):format(speciesLabel(s.species)) or "NO SHINY",
+    }
+    if s.skipped and s.skipped > 0 then
+      lines[#lines + 1] = ("%d non-target shiny(s) fled"):format(s.skipped)
+    end
+
+    local lineH = (lineFont and lineFont:getHeight() or 14) + 4
+    local titleH = titleFont and titleFont:getHeight() or 18
+    local btnH = math.floor(ref * 0.075)
+    local w = math.min(vp.width - pad * 2, math.floor(vp.width * 0.86))
+    local h = pad * 2 + titleH + math.floor(pad * 0.6) + lineH * #lines
+      + math.floor(pad * 0.8) + btnH + pad
+
+    local x = math.floor((vp.width - w) / 2)
+    local y = math.floor((vp.height - h) / 2)
+    panel(x, y, w, h, 0.9)
+
+    local cy = y + pad
+    printAt(title, titleFont, x + centeredX(titleFont, title, w), cy, 1)
+    cy = cy + titleH + math.floor(pad * 0.6)
+    for _, line in ipairs(lines) do
+      printAt(line, lineFont, x + pad, cy, 0.9)
+      cy = cy + lineH
+    end
+    cy = cy + math.floor(pad * 0.8)
+    button(areas, "focus_dismiss", "OK", x + pad, cy, w - pad * 2, btnH, "dismiss")
+  end
+
   mod.hooks:wrap("render.hud", function(next, game, viewport)
     next(game, viewport)
     state.hitAreas = nil
-    if not mod.options:get("show_hud") then return end
     if not (love and love.graphics) then return end
 
     local vp = {
@@ -514,14 +1013,36 @@ return function(mod)
     }
     if not (vp.width and vp.height and vp.width > 0 and vp.height > 0) then return end
 
+    -- viewport calc is hoisted above the SHOW HUD gate: a FOCUS session or
+    -- its summary draws regardless of that setting -- a covered screen
+    -- with no countdown, or a result nobody can dismiss, would be a soft
+    -- lock. Anything else falls through to the existing SHOW HUD-gated path
+    -- unchanged.
     local prevFont = love.graphics.getFont()
     local areas = {}
-    if state.hudMode == "mini" then
-      drawMini(vp, areas)
-    elseif state.hudMode == "full" then
-      drawFull(vp, areas)
+    local function drawUnderlyingHud()
+      if not mod.options:get("show_hud") then return end
+      if state.hudMode == "mini" then
+        drawMini(vp, areas)
+      elseif state.hudMode == "full" then
+        drawFull(vp, areas)
+      else
+        drawNormal(vp, areas)
+      end
+    end
+
+    if state.focus.active then
+      drawFocus(vp, areas)
+    elseif state.focus.confirm == "offer" then
+      drawUnderlyingHud()
+      drawOffer(vp, areas)
+    elseif state.focus.summary then
+      drawUnderlyingHud()
+      drawSummary(vp, areas)
+    elseif mod.options:get("show_hud") then
+      drawUnderlyingHud()
     else
-      drawNormal(vp, areas)
+      return
     end
     state.hitAreas = areas
     love.graphics.setColor(1, 1, 1, 1)
@@ -533,6 +1054,21 @@ return function(mod)
   -- small -- while the clock and the counters get the rest of it.  Any other
   -- size falls straight through to the engine's normal composite.
   mod.hooks:wrap("render.compose", function(next, renderer, ctx)
+    -- A FOCUS session owns the window outright: the game's canvases are
+    -- never blitted, so nothing about what is behind the cover -- a shiny
+    -- battle included -- can reach the screen. Returning true without
+    -- calling next is what consumes the composite entirely. This ignores
+    -- SHOW HUD on purpose: turning the HUD off mid-session must not
+    -- uncover the screen, or leave the countdown with nothing to draw over.
+    if state.focus.active and love and love.graphics and ctx then
+      local uiw, uih = ctx.uiw or 160, ctx.uih or 144
+      if uiw > 0 and uih > 0 then state.pipAspect = uiw / uih end
+      love.graphics.setColor(0, 0, 0, 1)
+      love.graphics.rectangle("fill", 0, 0, ctx.ww or 0, ctx.wh or 0)
+      love.graphics.setColor(1, 1, 1, 1)
+      return true
+    end
+
     if state.hudMode ~= "full" or not mod.options:get("show_hud")
        or not (love and love.graphics and ctx and renderer.blitCanvas) then
       return next(renderer, ctx)
@@ -603,13 +1139,33 @@ return function(mod)
   end
 
   mod.hooks:wrap("input.pointer", function(next, game, ev)
-    if not (ev and mod.options:get("show_hud")) then return next(game, ev) end
+    if not ev then return next(game, ev) end
+
+    -- While a session is active the screen is fully covered by
+    -- render.compose, so a tap that misses our own chips must NOT reach the
+    -- game underneath -- unlike the normal-HUD miss behaviour below, which
+    -- deliberately lets a d-pad press under a corner panel through. Falling
+    -- through here would let a blind tap (the peek's ~4s window, the END
+    -- confirm's own gaps, or just resting a thumb on the glass) drive the
+    -- hidden battle: advance a text box, pick a move, even RUN -- exactly
+    -- what the cover exists to prevent touching. offer/summary are exempt:
+    -- the game is genuinely visible underneath both, so a miss reaching it
+    -- is the same harmless behaviour a miss on the normal HUD already has.
+    local coveredMustSwallow = state.focus.active
+
+    if not (mod.options:get("show_hud") or coveredMustSwallow or state.focus.summary) then
+      return next(game, ev)
+    end
 
     if state.grabbedId ~= nil and ev.id == state.grabbedId then
       if ev.phase == "released" then
         local area = areaAt(ev.x, ev.y)
         if area and area.id == state.grabbedArea then
-          state.hudMode = area.mode
+          if area.action then
+            focusAction(area.action, game)
+          elseif area.mode then
+            state.hudMode = area.mode
+          end
         end
         state.grabbedId, state.grabbedArea = nil, nil
       elseif ev.phase == "cancelled" then
@@ -625,6 +1181,7 @@ return function(mod)
         return true
       end
     end
+    if coveredMustSwallow then return true end
     return next(game, ev)
   end)
 
@@ -703,6 +1260,10 @@ return function(mod)
   end
 
   mod.hooks:wrap("input.step", function(next, game, dt)
+    -- unconditional and first: a FOCUS countdown, its keep-awake, and its
+    -- own expiry must run whatever AUTO HUNT or the screen stack is doing
+    focusTick(game)
+
     local hunting = mod.options:get("enabled")
     applySpeedCap(game, hunting)
 
@@ -715,7 +1276,11 @@ return function(mod)
     end
     state.wasRunning = running
 
-    if hunting and state.fleeing then
+    -- state.fleeing is only ever set by our own flee (the auto-hunt one, or
+    -- a FOCUS session's forced early exit), so it never needed `hunting` on
+    -- top of it -- and a focus exit must mash through the text box even
+    -- with AUTO HUNT switched off
+    if state.fleeing then
       -- one fresh wasPressed edge per tick -- mashing, not holding, since
       -- each text box needs its own edge to advance
       mod.input:tap(game, "a")

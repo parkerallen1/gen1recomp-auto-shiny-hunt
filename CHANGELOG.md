@@ -3,6 +3,44 @@
 Format: [keep a changelog](https://keepachangelog.com/en/1.1.0/).
 Version headings match `manifest.json`'s `version`.
 
+## 0.6.0
+
+### Added
+
+- **Focus timer**: a fixed-length hunting session (5-60 minutes, `FOCUS
+  LENGTH`) for hunting while doing something else. `FOCUS TIMER` adds an
+  `F` chip to the corner HUD; starting a session covers the screen
+  entirely and shows nothing but a countdown until it reaches zero --
+  no vibrate, no pulsing border, no `SHINY!` tag, and the clock itself is a
+  raw wall-clock timer rather than the hunting clock, so a found shiny
+  parking the shuffle can never be inferred from a stalled number. Tapping
+  the screen peeks a static card (session length, targets) that never
+  shows encounter counts, since a parked count would itself leak a find.
+  Music is muted for the session (no hook exists for battle SFX, so that
+  residual leak is documented rather than hidden). Ending a session early
+  requires a confirmation worded identically whether or not anything is
+  waiting, and then runs from whatever wild battle is open -- a held shiny
+  included, so ending early costs you the find. At zero the screen returns,
+  every suppressed alert fires, and a summary reports what happened until
+  dismissed.
+- **Targets**: pick one or more species (or none, for "any shiny") from a
+  full scrollable species list via the engine's own list screen, persisted
+  in the savefile. During a session, a shiny that is not one of the current
+  targets is fled rather than held -- irreversible, so the summary always
+  reports how many were skipped this way.
+
+### Fixed
+
+- `KEEP SCREEN AWAKE` stopped applying the moment a found shiny parked the
+  hunt (its own apply sat behind the hunting-blocked early return in the
+  same tick), which would have let a Focus session's device sleep on
+  exactly the runs it most needed to stay lit. A session now holds the
+  screen awake unconditionally, independent of AUTO HUNT.
+- The README's Setup section still said `SPEED CAP` was 4X by default; it
+  has been 10X since 0.5.0.
+- The README pointed at `docs/launcher.md`, an engine-repo path that does
+  not exist in this repo.
+
 ## 0.5.1
 
 ### Changed
