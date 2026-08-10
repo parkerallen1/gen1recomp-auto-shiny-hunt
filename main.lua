@@ -493,8 +493,9 @@ return function(mod)
     pcall(function() mod.save:set("focus_targets", list) end)
   end
 
-  -- an empty set means "any shiny" -- the mod's behaviour before targeting
-  -- existed, and what a FOCUS session with nothing picked still gets
+  -- An empty set means "any shiny" -- the mod's behaviour before targeting
+  -- existed, and what a FOCUS session with nothing picked still gets.
+  -- Only ever consulted from inside a session; see battle.started.
   local function isTarget(species)
     local set = targets()
     if next(set) == nil then return true end
@@ -550,10 +551,21 @@ return function(mod)
     if ev.kind ~= "wild" then return end
     local mon = ev.battle and ev.battle.enemy and ev.battle.enemy.mon
     if isShinyMon(mon) then
-      -- a shiny that is not one of the current targets is treated exactly
+      -- A shiny that is not one of the current targets is treated exactly
       -- like a common: fled, and counted so the summary can own up to it.
-      if not isTarget(species) then
-        if state.focus.active then state.focus.skipped = state.focus.skipped + 1 end
+      --
+      -- Only inside a FOCUS session, which is the whole scope this was
+      -- documented with and the only place it can be owned up to: the
+      -- summary is what reports the skips, and there is no summary outside
+      -- a session.  Before 0.7.2 the target test ran on every wild battle
+      -- and only the *counter* was session-scoped, so a target list left
+      -- behind after a session -- and it is saved, so it does outlive one --
+      -- silently ran from every off-target shiny during ordinary hunting,
+      -- with no vibrate, no tag and nothing counted.  That is the mod's one
+      -- headline promise ("a shiny battle is left on screen") broken in the
+      -- most expensive way there is.
+      if state.focus.active and not isTarget(species) then
+        state.focus.skipped = state.focus.skipped + 1
         state.fleeing = true
         state.autoRunArmed = true
         ev.battle:tryRun()
@@ -626,6 +638,21 @@ return function(mod)
   -- muting is exactly what a focus block wants anyway. There is no
   -- equivalent hook for battle SFX; that residual leak is documented, not
   -- hidden.
+  -- Blackout, at the source.  render.compose already refuses to blit the
+  -- game's canvases during a session, but that only covers the engine's own
+  -- composite: anything that draws in window space *after* it -- a peer
+  -- mod's render.hud link, a re-drawn dialogue box -- lands on top of the
+  -- cover, and a game text box appearing over the countdown is exactly the
+  -- leak a session exists to prevent (a fishing verdict box was the one
+  -- caught in the wild).  Answering false here takes every state off the
+  -- draw list entirely, so there is nothing downstream for anybody to
+  -- composite, mirror or restyle.  The states keep their update and input
+  -- ownership -- the hunt underneath runs normally, it just cannot be seen.
+  mod.hooks:wrap("screen.render_visible", function(next, screen)
+    if state.focus.active then return false end
+    return next(screen)
+  end)
+
   mod.hooks:wrap("music.volume", function(next, vol, ctx)
     if state.focus.active then return 0 end
     return next(vol, ctx)
@@ -1275,6 +1302,17 @@ return function(mod)
   -- conditional buried in here.
   local function drawFocus(vp, areas)
     local f = state.focus
+    -- The cover paints its own ground, rather than inheriting the one
+    -- render.compose laid down earlier in the frame.  render.hud is the last
+    -- thing the engine calls before the touch overlay, so a fill here is
+    -- over anything a peer mod drew in between -- and it also means the
+    -- blackout does not depend on the compose takeover having run at all.
+    -- Opaque and full-window on purpose: this is the guarantee, not a
+    -- backdrop.
+    love.graphics.setColor(0, 0, 0, 1)
+    love.graphics.rectangle("fill", 0, 0, vp.width, vp.height)
+    love.graphics.setColor(1, 1, 1, 1)
+
     if f.confirm == "end" then
       drawConfirmPanel(vp, areas, FOCUS_END_WARNING, "END NOW", "endnow", "STAY", "cancel")
       return
@@ -1366,7 +1404,19 @@ return function(mod)
   end
 
   mod.hooks:wrap("render.hud", function(next, game, viewport)
-    next(game, viewport)
+    -- A session consumes the HUD chain instead of passing it on: whatever
+    -- else wraps this hook draws game-derived furniture, and during a
+    -- blackout there is nothing it could draw that would be safe. Outside a
+    -- session everything is handed on exactly as before.
+    --
+    -- This only reaches links *inside* ours, and in practice that is not
+    -- where the danger is: mod.hooks:wrap defaults to priority 0 (the
+    -- manifest's `priority` is load order, not hook order) and this mod
+    -- passes none, while Gen1 Modern UI wraps this hook at 100 -- so that
+    -- peer is always the OUTER link, draws before we run, and cannot be
+    -- stopped from here by anything. The opaque fill in drawFocus is what
+    -- covers it, and is the layer that actually carries the guarantee.
+    if not state.focus.active then next(game, viewport) end
     state.hitAreas = nil
     if not (love and love.graphics) then return end
 

@@ -218,16 +218,37 @@ restarting the app or reloading the mod ends it with nothing to show.
 
 ### Targets
 
-From the offer panel, **TARGETS** opens a scrollable list of every known
-species. Pick one or more to hunt for specifically; pick none and a session
-alerts on any shiny, the mod's normal behaviour.
+This is how you tell it which Pokemon you are actually after. To get there:
 
-**A shiny that is not one of your targets is fled, not caught** -- this is
-what makes targeting worth having, but it is irreversible, silent, and the
-one thing in this whole feature that runs against the mod's own promise to
-leave every shiny battle alone. The summary reports how many were skipped
-this way so it is never a total surprise, but there is no undo. Leave the
-target list empty if you are not sure yet.
+1. Turn **FOCUS TIMER** on in the mod's settings.
+2. Put the HUD at its **normal** corner-panel size -- the `F` chip only
+   draws there. (`-` from full; tap the pill from mini.)
+3. Tap **`F`**, then **TARGETS**.
+
+That opens a scrollable list of every species the game knows, in dex order.
+Tap to toggle; picked species show an `X`. `-- CLEAR ALL --` empties the
+list, `-- DONE --` closes it. The offer panel then reads `TARGETS: 3
+SPECIES` (or `TARGETS: ANY SHINY`) so you can see it took. Picks are written
+to your savefile's mod data immediately, but only reach disk on your next
+in-game SAVE.
+
+Targets decide **which shiny the session stops for** -- not what appears.
+What can show up is set by where you are standing, or which rod you are
+casting in FISH mode.
+
+**Inside a session, a shiny that is not one of your targets is fled, not
+caught.** That is what makes targeting worth having, but it is irreversible
+and it is the one thing in this feature that runs against the mod's own
+promise to leave every shiny battle alone. The summary reports how many were
+skipped so it is never a total surprise, but there is no undo. Leave the
+list empty if you are not sure.
+
+**The list only binds inside a FOCUS session.** During ordinary hunting it
+is ignored completely and every shiny is held, whatever is on it -- so a
+list left over from an old session cannot quietly cost you anything. (Before
+0.7.2 it bound everywhere, which meant exactly that: a saved target list ran
+from off-target shinies during normal hunting, silently and uncounted. If
+you set targets on 0.6.0 or 0.7.0/0.7.1, that was happening.)
 
 ## Battery
 
@@ -273,6 +294,16 @@ power regardless. To cut it down:
   pipeline -- are not drawn over the picture-in-picture while it's up. Shrink
   the HUD back to the corner panel and they're there again; nothing about the
   setting changes.
+- A FOCUS session's cover is three layers deep, because refusing to draw the
+  game is not the same as nothing being drawn. It takes every screen off the
+  draw list (`screen.render_visible`), refuses the composite
+  (`render.compose`), and then paints its own opaque full-window ground in
+  `render.hud` before the countdown. That last one is the layer that matters:
+  a peer mod wrapping `render.hud` at a higher priority than this mod's runs
+  *before* it and cannot be stopped, so the only defence against what it drew
+  is covering it. Until 0.7.2 the cover relied on the composite alone, and a
+  peer redrawing the dialogue box in window space put a live `Oh! It's a
+  bite!` text box on top of a running countdown.
 - Compatible with Wilds of Kanto (its "Random Enc" setting keeps the
   classic step-based rolls this mod needs -- leave it on) and with any
   sprite-replacement mod (sprites are a separate layer from battle logic).

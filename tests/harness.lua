@@ -82,7 +82,10 @@ H.fakeFont = fakeFont
 -- Records every draw so a test can assert on layout: what was printed,
 -- where, and at what font size.
 function H.installLove()
-  local rec = { prints = {}, rects = {}, draws = 0, fonts = 0, vibrates = 0 }
+  -- `seq` is a frame-wide draw counter stamped on every recorded print and
+  -- rect, so a test can assert one thing was drawn OVER another -- which is
+  -- the whole question when a cover has to hide a peer mod's drawing.
+  local rec = { prints = {}, rects = {}, draws = 0, fonts = 0, vibrates = 0, seq = 0 }
   local current = fakeFont(12)
   local function num(v, what)
     assert(type(v) == "number" and v == v, ("%s is not a number: %s"):format(what, tostring(v)))
@@ -110,20 +113,24 @@ function H.installLove()
       getHeight = function() return 600 end,
       print = function(text, x, y)
         assert(type(text) == "string", "print got " .. type(text))
+        rec.seq = rec.seq + 1
         rec.prints[#rec.prints + 1] = {
           text = text, x = num(x, "print x"), y = num(y, "print y"),
           px = current.px, w = current:getWidth(text), h = current:getHeight(),
+          seq = rec.seq,
         }
       end,
       rectangle = function(mode, x, y, w, h)
+        rec.seq = rec.seq + 1
         rec.rects[#rec.rects + 1] = { mode = mode, x = num(x, "rect x"),
-          y = num(y, "rect y"), w = num(w, "rect w"), h = num(h, "rect h") }
+          y = num(y, "rect y"), w = num(w, "rect w"), h = num(h, "rect h"),
+          seq = rec.seq }
       end,
       draw = function() rec.draws = rec.draws + 1 end,
     },
   }
   rec.reset = function()
-    rec.prints, rec.rects, rec.draws, rec.vibrates = {}, {}, 0, 0
+    rec.prints, rec.rects, rec.draws, rec.vibrates, rec.seq = {}, {}, 0, 0, 0
   end
   return rec
 end
@@ -327,6 +334,27 @@ function H.load(opts)
   end
   function t.overlay(battle)
     return bus:call("battle.overlay", function() end, battle or {})
+  end
+  -- the engine asks this per state, per frame, before it draws anything
+  function t.renderVisible(screen)
+    return bus:call("screen.render_visible", function() return true end, screen or {})
+  end
+  -- render.hud with a peer mod inside our link: whatever it draws lands
+  -- between the engine's composite and our own drawing, which is where the
+  -- leaked text box came from. `label` is what it prints.
+  -- `priority` places the peer outside our link (higher than our 100, the
+  -- Gen1 Modern UI case: it draws, then calls next into us) or inside it
+  -- (lower: it only draws if we hand the chain on).
+  function t.hudWithPeer(viewport, label, priority)
+    local drew = false
+    local remove = bus:wrap("render.hud", function(nextFn, game, vp)
+      drew = true
+      love.graphics.print(label or "PEER", 10, 10)
+      return nextFn(game, vp)
+    end, priority or 200, "peer")
+    bus:call("render.hud", function() end, {}, viewport)
+    remove()
+    return drew
   end
   function t.run(ctx)
     return bus:call("battle.run", function() return "vanilla" end, ctx or {})

@@ -1352,37 +1352,48 @@ do
   ok(not fled and t.state.shinyUp, "an empty target set still holds any shiny")
   t.emit("battle.ended", {})
 
-  -- a target set that does not include the species: fled, not caught
+  -- A target list is scoped to a FOCUS session and nothing else. It is
+  -- saved, so it outlives the session that set it -- and before 0.7.2 the
+  -- test below ran on every wild battle, which meant a list left behind
+  -- silently ran from every off-target shiny during ordinary hunting, with
+  -- nothing counting it and no summary to own up to it. Leaving a shiny on
+  -- screen is this mod's headline promise; only a session may break it.
+  local function shinyBattle(species)
+    local ran = false
+    t.emit("battle.started", { kind = "wild",
+      battle = { enemy = { mon = { species = species, dvs = H.SHINY_DVS } },
+                 tryRun = function() ran = true end } })
+    local held = t.state.shinyUp
+    t.emit("battle.ended", {})
+    return ran, held
+  end
+
   t.saved.focus_targets = { "9" }
   t.state.targets = nil -- force isTarget to reload from mod.save
   fled = false
-  t.emit("battle.started", { kind = "wild",
-    battle = { enemy = { mon = { species = 4, dvs = H.SHINY_DVS } },
-               tryRun = function() fled = true end } })
-  ok(fled and not t.state.shinyUp, "a shiny outside the target set is fled")
-  t.emit("battle.ended", {})
+  local ran, held = shinyBattle(4)
+  ok(not ran and held,
+     "outside a session an off-target shiny is HELD, not fled -- the list is "
+     .. "session scope, and a stale one must never cost a shiny")
 
-  -- during a session an off-target shiny is also counted as skipped
+  -- inside a session it binds, and is counted so the summary can own up
   t.state.focus.active = true
   t.state.focus.skipped = 0
-  fled = false
-  t.emit("battle.started", { kind = "wild",
-    battle = { enemy = { mon = { species = 4, dvs = H.SHINY_DVS } },
-               tryRun = function() fled = true end } })
-  ok(fled and t.state.focus.skipped == 1,
-    "an off-target shiny during a session is counted as skipped")
-  t.emit("battle.ended", {})
-  t.state.focus.active = false
+  ran, held = shinyBattle(4)
+  ok(ran and not held, "inside a session an off-target shiny is fled")
+  ok(t.state.focus.skipped == 1, "and counted as skipped for the summary")
 
-  -- with the species in the target set, it is held
+  -- ... and a targeted one is held even mid-session
   t.saved.focus_targets = { "4" }
   t.state.targets = nil
-  fled = false
-  t.emit("battle.started", { kind = "wild",
-    battle = { enemy = { mon = { species = 4, dvs = H.SHINY_DVS } },
-               tryRun = function() fled = true end } })
-  ok(not fled and t.state.shinyUp, "a targeted shiny is held")
-  t.emit("battle.ended", {})
+  ran = shinyBattle(4)
+  ok(not ran, "a targeted shiny is held during a session")
+  t.state.focus.active = false
+  t.state.focus.heldShiny = false
+
+  -- with the species in the target set, it is held outside one too
+  ran, held = shinyBattle(4)
+  ok(not ran and held, "and outside one")
 
   -- the picker itself: pushed via mod.ui, toggled in place with no re-push
   -- (onChoose does not pop the screen), and persisted through mod.save
@@ -1419,6 +1430,77 @@ do
   onChoose(rows[2], { items = rows }) -- rows[2] is "-- CLEAR ALL --"
   ok(target.right == "", "CLEAR ALL blanks every row's checkmark in place")
   ok(#t.saved.focus_targets == 0, "CLEAR ALL empties the saved list")
+end
+
+-- The cover has to be a cover. render.compose refusing to blit the game's
+-- canvases only settles the engine's own composite -- it says nothing about
+-- anything drawing in window space afterwards, and a peer mod's render.hud
+-- link doing exactly that put a live "Oh! It's a bite!" box on top of a
+-- running countdown. Three layers, tested separately.
+section("FOCUS blackout survives a peer mod drawing over it")
+do
+  local t = H.load()
+  t.options.enabled = true
+
+  -- 1. states are taken off the draw list entirely, so there is nothing
+  --    downstream for anyone to composite, mirror or restyle
+  ok(t.renderVisible({ isOverworld = true }) ~= false,
+     "outside a session every screen draws as normal")
+  t.state.focus.active = true
+  t.state.focus.startedAt = rec.clock
+  t.state.focus.lengthSec = 600
+  ok(t.renderVisible({ isOverworld = true }) == false,
+     "during a session the overworld is off the draw list")
+  ok(t.renderVisible({}) == false, "and so is every state pushed over it")
+
+  -- 2. a peer INSIDE our link never gets the chain at all. Inside means a
+  --    LOWER priority: mod.hooks:wrap defaults to 0 (Hooks.lua:24 -- the
+  --    manifest's `priority` is load order, not hook order) and this mod
+  --    passes none, so 0 is the number to be under.
+  rec.reset()
+  local drew = t.hudWithPeer(H.viewport(800, 600), "PEERBOX", -50)
+  ok(not drew, "a peer under us is not handed the HUD chain during a session")
+
+  -- 3. a peer OUTSIDE our link draws before we ever run -- nothing can stop
+  --    that -- so the cover paints its own opaque ground over the top. This
+  --    is the layer that actually carries the guarantee, and the one the
+  --    leak in the wild needed: Gen1 Modern UI wraps render.hud at 100,
+  --    which is above this mod's 0, so it is always the outer link.
+  rec.reset()
+  drew = t.hudWithPeer(H.viewport(800, 600), "PEERBOX", 200)
+  ok(drew, "a peer above us still runs (we cannot prevent that)")
+  local peerSeq
+  for _, p in ipairs(rec.prints) do
+    if p.text == "PEERBOX" then peerSeq = p.seq end
+  end
+  ok(peerSeq ~= nil, "and it did draw")
+  local covered = false
+  for _, r in ipairs(rec.rects) do
+    if r.mode == "fill" and r.x <= 0 and r.y <= 0
+       and r.w >= 800 and r.h >= 600 and peerSeq and r.seq > peerSeq then
+      covered = true
+    end
+  end
+  ok(covered, "the cover paints a full-window fill over whatever it drew")
+
+  -- and the countdown is still on top of the cover, not buried by it
+  local timerSeq
+  for _, p in ipairs(rec.prints) do
+    if p.text:match("^%d+:%d%d") then timerSeq = p.seq end
+  end
+  ok(timerSeq and peerSeq and timerSeq > peerSeq,
+     "and the countdown draws after it, not under it")
+
+  -- none of this may leak into normal play
+  t.state.focus.active = false
+  rec.reset()
+  drew = t.hudWithPeer(H.viewport(800, 600), "PEERBOX", -50)
+  ok(drew, "with no session the chain is handed on exactly as before")
+  local fullFill = false
+  for _, r in ipairs(rec.rects) do
+    if r.mode == "fill" and r.w >= 800 and r.h >= 600 then fullFill = true end
+  end
+  ok(not fullFill, "and nothing paints over the screen")
 end
 
 section("FOCUS reveal")

@@ -3,6 +3,31 @@
 Format: [keep a changelog](https://keepachangelog.com/en/1.1.0/).
 Version headings match `manifest.json`'s `version`.
 
+## 0.7.2
+
+### Fixed
+
+- **A saved target list silently fled shinies during ordinary hunting.**
+  Targeting was documented as a FOCUS-session feature, but the target test
+  ran on every wild battle -- only the "how many were skipped" counter was
+  session-scoped. Since the list is saved, one left behind after a session
+  kept running from every off-target shiny forever after, with no vibrate,
+  no border, no tag and nothing counting it. That is this mod's headline
+  promise broken in the most expensive way available. The list now binds
+  only while a session is running; outside one it is ignored entirely and
+  every shiny is held, whatever is on it.
+- **A game text box could draw on top of a FOCUS session's cover.**
+  `render.compose` refusing to blit the game's canvases settles the engine's
+  own composite and nothing else: a peer mod that wraps `render.hud` at a
+  higher priority than this mod's (Gen1 Modern UI is at 100; `mod.hooks:wrap`
+  defaults to 0) runs first and draws in window space, landing on top of the
+  cover. A fishing verdict box (`Oh! It's a bite!`) was caught doing exactly
+  that over a running countdown. The cover is now three layers: every screen
+  is taken off the draw list for the duration (`screen.render_visible`), the
+  composite is still refused, and `render.hud` paints its own opaque
+  full-window ground before drawing the countdown -- so anything drawn by an
+  outer link is covered rather than merely un-composited.
+
 ## 0.7.1
 
 ### Fixed

@@ -5,6 +5,7 @@
     "input.pointer",
     "render.hud",
     "render.compose",
+    "screen.render_visible",
     "battle.started",
     "battle.ended",
     "battle.run",
@@ -43,7 +44,7 @@
       "repo": "ArmstrongThomas/gen1-modern-ui",
       "role": "peer",
       "verified": "v0.8.3",
-      "why": "wraps render.compose / render.hud / input.pointer at priority 100"
+      "why": "wraps render.compose / render.hud / input.pointer at priority 100 -- ABOVE this mod's 0 (mod.hooks:wrap defaults to 0; the manifest's `priority` is load order, not hook order), so it is the outer link and draws before we do. That is why a FOCUS session's cover paints its own opaque ground in render.hud rather than trusting the compose takeover alone."
     }
   ]
 }
