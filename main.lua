@@ -157,10 +157,17 @@ return function(mod)
       help = "How long a FOCUS session runs. The screen is covered for the "
         .. "whole length and nothing about what it found is shown until it "
         .. "ends -- including if it ends in the first minute." },
-    { key = "focus_chip", type = "toggle", label = "FOCUS TIMER", default = false,
-      help = "Adds a FOCUS chip to the corner HUD. Tap it to start a "
-        .. "fixed-length session: the screen is covered, a countdown "
-        .. "replaces the clock, and the result is held back until zero." },
+    -- On by default since 0.7.3.  It was off, which meant the whole FOCUS
+    -- feature was behind a setting you had to already know existed to go
+    -- looking for -- and it drew its chip at one HUD size out of three on
+    -- top of that.  A headline feature nobody can find is not a feature.
+    -- Turning this off still hides the chip, so anyone who wants the bare
+    -- HUD keeps it, and an explicit `off` already stored is untouched.
+    { key = "focus_chip", type = "toggle", label = "FOCUS TIMER", default = true,
+      help = "Adds an F chip to the HUD. Tap it to start a fixed-length "
+        .. "session: the screen is covered, a countdown replaces the clock, "
+        .. "and the result is held back until zero. Turn it off for a HUD "
+        .. "with no F on it." },
   })
 
   local state = {
@@ -1027,6 +1034,22 @@ return function(mod)
     return { x = math.floor(width - m - w), y = m, w = w, h = h, m = m }
   end
 
+  -- The FOCUS entry point: on when the option is, and only while there is no
+  -- session, offer or summary already occupying the screen -- one way in,
+  -- and never a second target stacked under something else.
+  --
+  -- Drawn at the normal and full sizes, deliberately not at mini.  The rule
+  -- the HUD follows: a control you might need *urgently* is on every size
+  -- (that is PAUSE, which exists because a hunt you cannot stop is a trap),
+  -- and a feature you go looking for is where there is room for it.  Mini is
+  -- the size whose whole job is to be out of the way, and the pill itself is
+  -- already a tap target back to the panel, so reaching FOCUS from there
+  -- costs exactly one extra tap.
+  local function showFocusChip()
+    return mod.options:get("focus_chip") and not state.focus.active
+      and not state.focus.summary and not state.focus.confirm
+  end
+
   local function drawMini(vp, areas)
     local ref = math.min(vp.width, vp.height)
     local pad = math.max(5, math.floor(ref * 0.014))
@@ -1071,17 +1094,13 @@ return function(mod)
       rowText[#rowText + 1] = ("+%d more"):format(#rows - shown)
     end
 
-    -- the FOCUS entry chip only shows up when the option is on and there is
-    -- no session/offer/summary already occupying the screen -- one way in,
-    -- and never a second target stacked under something else
-    local showFocusChip = mod.options:get("focus_chip") and not state.focus.active
-      and not state.focus.summary and not state.focus.confirm
+    local focusChip = showFocusChip()
 
     -- the chip row, right-aligned in the panel: 4px between neighbours, and
     -- the gaps counted into the width the panel has to reserve or the
     -- leftmost chip creeps back over the tag on the narrowest screen
     local CHIP_GAP = 4
-    local chipCount = showFocusChip and 4 or 3
+    local chipCount = focusChip and 4 or 3
 
     local function widthOf(font, text) return font and font:getWidth(text) or 0 end
     local topW = widthOf(tagFont, tag) + pad
@@ -1112,7 +1131,7 @@ return function(mod)
     local function chipX(slot)
       return x + w - pad - chipSize * slot - CHIP_GAP * (slot - 1)
     end
-    if showFocusChip then
+    if focusChip then
       chip(areas, "focus_offer", nil, "F", chipX(4), cy, chipSize, "offer")
     end
     -- the stop button, on every HUD size and always in the same place: with
@@ -1153,11 +1172,19 @@ return function(mod)
     -- the full-size screen
     areas[#areas + 1] =
       { id = "pip", mode = "normal", x = pip.x, y = pip.y, w = pip.w, h = pip.h }
+    -- the chip row under the PiP, right-aligned to its edge and laid out
+    -- right to left, so dropping F never moves the two that are always there
     local chipRowY = pip.y + pip.h + math.floor(m * 0.4)
+    local chipGap = math.max(2, math.floor(m * 0.4))
+    local function chipX(slot)
+      return pip.x + pip.w - chipSize * slot - chipGap * (slot - 1)
+    end
+    if showFocusChip() then
+      chip(areas, "focus_offer", nil, "F", chipX(3), chipRowY, chipSize, "offer")
+    end
     chip(areas, "pause", nil, state.paused and ">" or "II",
-      pip.x + pip.w - chipSize * 2 - math.floor(m * 0.4), chipRowY, chipSize, "pause")
-    chip(areas, "shrink", "normal", "-",
-      pip.x + pip.w - chipSize, chipRowY, chipSize)
+      chipX(2), chipRowY, chipSize, "pause")
+    chip(areas, "shrink", "normal", "-", chipX(1), chipRowY, chipSize)
 
     -- text column beside the PiP, or under it when the window is too narrow
     -- for the two to sit side by side

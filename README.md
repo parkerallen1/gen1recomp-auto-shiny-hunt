@@ -166,8 +166,12 @@ them with a tap (or a mouse click on desktop):
 | **normal** | the corner panel -- clock, total, top species |
 | **full** | the HUD owns the screen; the game shrinks to a corner PiP |
 
-- `II` pauses the hunt and `>` resumes it. It is on all three sizes,
-  because a hunt you cannot stop is the one thing the HUD must never hide.
+- `II` pauses the hunt and `>` resumes it, and `F` opens the focus timer.
+  The rule: a control you might need *urgently* is on every size (`II`,
+  because a hunt you cannot stop is a trap), and a feature you go looking
+  for is where there is room for it (`F`, on normal and full). Mini's whole
+  job is to be out of the way, and the pill is already one tap back to the
+  panel.
 - `+` grows the HUD, `-` shrinks it. From the corner panel, `-` goes to the
   pill and tapping the pill brings the panel back.
 - At full size the game is still live in the picture-in-picture corner --
@@ -182,10 +186,10 @@ them with a tap (or a mouse click on desktop):
 ## Focus timer
 
 A fixed-length hunting session for when you want the phone to hunt while you
-do something else, without the temptation to keep checking on it. Turn on
-**FOCUS TIMER** in the mod's settings to add a **F** chip to the corner HUD
-(**normal** size only -- switch out of `full` to reach it), then tap it,
-pick a length from 5 to 60 minutes in **FOCUS LENGTH**, and tap **START**.
+do something else, without the temptation to keep checking on it. Tap
+the **`F`** chip on the HUD, pick a length from 5 to 60 minutes in
+**FOCUS LENGTH**, and tap **START**. `F` is on the normal and full sizes;
+turning **FOCUS TIMER** off in the mod's settings removes it entirely.
 
 While a session is running:
 
@@ -220,10 +224,10 @@ restarting the app or reloading the mod ends it with nothing to show.
 
 This is how you tell it which Pokemon you are actually after. To get there:
 
-1. Turn **FOCUS TIMER** on in the mod's settings.
-2. Put the HUD at its **normal** corner-panel size -- the `F` chip only
-   draws there. (`-` from full; tap the pill from mini.)
-3. Tap **`F`**, then **TARGETS**.
+1. Tap the **`F`** chip on the HUD, then **TARGETS**. (`F` is on the normal
+   and full sizes; from the mini pill, tap the pill to get the panel back.
+   If there's no `F` at all, **FOCUS TIMER** has been switched off in the
+   mod's settings.)
 
 That opens a scrollable list of every species the game knows, in dex order.
 Tap to toggle; picked species show an `X`. `-- CLEAR ALL --` empties the

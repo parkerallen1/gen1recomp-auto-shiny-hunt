@@ -3,6 +3,22 @@
 Format: [keep a changelog](https://keepachangelog.com/en/1.1.0/).
 Version headings match `manifest.json`'s `version`.
 
+## 0.7.3
+
+### Changed
+
+- **The focus timer is findable now.** It was behind two gates at once: its
+  `FOCUS TIMER` option shipped **off**, and even switched on the `F` chip
+  drew at one HUD size out of three -- so the way in was a setting you had
+  to already know existed. `FOCUS TIMER` now defaults **on**, and `F` draws
+  at the normal *and* full sizes. Switching the option off still removes the
+  chip entirely, and an explicit `off` already saved is untouched.
+- `F` is deliberately **not** on the mini pill, which is the HUD's placement
+  rule made explicit: a control you might need *urgently* is on every size
+  (that is `II`, because a hunt you cannot stop is a trap), and a feature
+  you go looking for is where there is room for it. Mini exists to be out of
+  the way, and its pill is already one tap back to the panel.
+
 ## 0.7.2
 
 ### Fixed

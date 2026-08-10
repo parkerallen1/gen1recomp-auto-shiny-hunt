@@ -660,6 +660,77 @@ do
   end
 end
 
+-- The HUD's placement rule: a control you might need urgently is on every
+-- size, a feature you go looking for is where there is room for it. PAUSE is
+-- the first kind, FOCUS the second -- and mini, whose whole job is to be out
+-- of the way, is the size that tells them apart.
+section("the FOCUS chip is reachable where there is room for it")
+do
+  local t = H.load({ speciesName = "NIDORANFEMALE" })
+  t.options.enabled = true
+  for i = 1, 40 do
+    t.emit("battle.started", H.wildEvent(H.COMMON_DVS, i % 11))
+    t.emit("battle.ended", {})
+  end
+
+  for _, mode in ipairs({ "normal", "full" }) do
+    for _, wh in ipairs(SIZES) do
+      local W, Ht = wh[1], wh[2]
+      t.state.hudMode = mode
+      t.state.focus.confirm = nil
+      rec.reset()
+      t.hud(H.viewport(W, Ht))
+      local area = t.area("focus_offer")
+      local where = ("%s at %dx%d"):format(mode, W, Ht)
+      if ok(area ~= nil, ("%s publishes an F target"):format(where)) then
+        ok(area.x >= 0 and area.y >= 0
+           and area.x + area.w <= W and area.y + area.h <= Ht,
+           ("%s keeps the F target on screen"):format(where))
+        ok(t.area("pause") and t.area("shrink"),
+           ("%s still has its other chips"):format(where))
+        ok(t.tap("focus_offer") and t.state.focus.confirm == "offer",
+           ("%s opens the offer when tapped"):format(where))
+      end
+    end
+  end
+
+  -- mini stays a one-line pill: PAUSE only, and the pill itself is the tap
+  -- back to the panel that FOCUS lives on
+  t.state.hudMode = "mini"
+  t.state.focus.confirm = nil
+  rec.reset()
+  t.hud(H.viewport(800, 600))
+  ok(t.area("focus_offer") == nil, "mini does not carry the F chip")
+  ok(t.area("pause") ~= nil, "but does carry PAUSE, which is the urgent one")
+  ok(t.area("pill") ~= nil, "and the pill is one tap back to the panel")
+
+  -- the option still hides it everywhere
+  t.options.focus_chip = false
+  for _, mode in ipairs({ "normal", "full" }) do
+    t.state.hudMode = mode
+    rec.reset()
+    t.hud(H.viewport(800, 600))
+    ok(t.area("focus_offer") == nil,
+       ("FOCUS TIMER off hides the chip at %s"):format(mode))
+  end
+  t.options.focus_chip = true
+
+  -- and it never stacks a second way in under something already up
+  for _, blocker in ipairs({ "active", "summary", "confirm" }) do
+    t.state.hudMode = "full"
+    t.state.focus.active = blocker == "active"
+    t.state.focus.summary = blocker == "summary" and { reason = "done", seconds = 1,
+      encounters = 0, shiny = false, skipped = 0 } or nil
+    t.state.focus.confirm = blocker == "confirm" and "offer" or nil
+    t.state.focus.startedAt, t.state.focus.lengthSec = rec.clock, 600
+    rec.reset()
+    t.hud(H.viewport(800, 600))
+    ok(t.area("focus_offer") == nil,
+       ("no second F chip while a %s is up"):format(blocker))
+  end
+  t.state.focus.active, t.state.focus.summary, t.state.focus.confirm = false, nil, nil
+end
+
 section("pause reads on the HUD")
 do
   local t = H.load()
@@ -1082,10 +1153,13 @@ do
     "the range divides evenly by the step")
   ok(minutes and minutes.choices == nil, "FOCUS LENGTH has no choices -- it is a number widget")
 
+  -- On by default since 0.7.3: off, at one HUD size out of three, put the
+  -- whole feature behind a setting you had to already know about to go
+  -- looking for it.
   local chipOpt
   for _, row in ipairs(t.schema) do if row.key == "focus_chip" then chipOpt = row end end
-  ok(chipOpt and chipOpt.type == "toggle" and chipOpt.default == false,
-    "FOCUS TIMER chip is off by default")
+  ok(chipOpt and chipOpt.type == "toggle" and chipOpt.default == true,
+    "FOCUS TIMER chip is on by default")
 end
 
 section("FOCUS countdown is wall-clock")
