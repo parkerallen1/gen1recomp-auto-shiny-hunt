@@ -19,10 +19,10 @@
       "why": "every hook we wrap, plus GameSpeed.LEVELS and Stats.isShiny"
     },
     {
-      "repo": "DramaticShape/DramaticShapeVoxelMod",
+      "repo": "artyrambles/DRAMALESS_SHAPE",
       "role": "peer",
-      "verified": "v1.8.1",
-      "why": "wraps Pokemon.new for its own shinies; owns the world pass"
+      "verified": "1.6.4",
+      "why": "the voxel mod in use: owns the world pass, has no shiny feature of its own, and does not touch Pokemon.new. Replaces DramaticShape/DramaticShapeVoxelMod, whose repo stopped resolving on 2026-08-10 (last read at v1.8.1, which did roll shinies)"
     },
     {
       "repo": "masterwebx/gen1recomp-shiny-pokemon",

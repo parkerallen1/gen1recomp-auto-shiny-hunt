@@ -32,13 +32,14 @@ local DIR_CHOICES = {
 }
 
 -- GAME SPEED ceiling while hunting.  The engine's ladder
--- (src/core/GameSpeed.lua) is 1, 2, 3, 4, 10, 20, ... -- 4X is the last rung
--- where a hunt still reads as the game running fast rather than a counter
--- being spun, so that is the highest this mod will let it sit.  The option
--- can only pick a *tighter* cap; there is deliberately no way to raise it.
-local MAX_SPEED_CAP = 4
+-- (src/core/GameSpeed.lua) is 1, 2, 3, 4, 10, 20, 30, ... -- 10X is the last
+-- rung the engine describes as a rate rather than a ceiling (past it vsync
+-- caps how much a frame can do anyway), so that is the highest this mod
+-- will let it sit.  The option can only pick a *tighter* cap; there is no
+-- way to raise it past MAX_SPEED_CAP.
+local MAX_SPEED_CAP = 10
 local SPEED_CAP_CHOICES = {
-  { "4X", "4" }, { "3X", "3" }, { "2X", "2" }, { "1X", "1" },
+  { "10X", "10" }, { "4X", "4" }, { "3X", "3" }, { "2X", "2" }, { "1X", "1" },
 }
 
 -- how long a *confirmed-uninterrupted* hold can run before giving up on
@@ -91,12 +92,11 @@ return function(mod)
         .. "encounter count. Stays visible even if you pause AUTO HUNT "
         .. "to deal with a shiny. Tap the + / - chips on it to blow it up "
         .. "full screen or shrink it back down." },
-    { key = "speed_cap", type = "choice", label = "SPEED CAP", default = "4",
+    { key = "speed_cap", type = "choice", label = "SPEED CAP", default = "10",
       choices = SPEED_CAP_CHOICES,
-      help = "Hard ceiling on GAME SPEED while AUTO HUNT is on. 4X is the "
-        .. "highest it will go -- past that an unattended hunt stops "
-        .. "feeling like playing the game at all. Your own setting comes "
-        .. "back when you turn AUTO HUNT off." },
+      help = "Ceiling on GAME SPEED while AUTO HUNT is on, and only while "
+        .. "it is on -- 10X at the most. Whatever you had set comes back "
+        .. "the moment you turn AUTO HUNT off." },
   })
 
   local state = {
@@ -111,16 +111,22 @@ return function(mod)
     -- battle reaction
     fleeing = false, autoRunArmed = false, shinyUp = false,
     -- stats: elapsed is real (wall-clock) time, deliberately not tied to
-    -- GAME SPEED or fixed-step dt -- love.timer.getTime() is a real clock
-    wasHunting = false, elapsedBase = 0, resumedAt = nil,
+    -- GAME SPEED or fixed-step dt -- love.timer.getTime() is a real clock.
+    -- It only advances while the hunt is actually running (see huntIsRunning):
+    -- a menu, the title screen, a load or a shiny sitting on screen all park
+    -- it, so the number stays "time spent hunting" rather than "time since
+    -- you switched it on".
+    wasRunning = false, elapsedBase = 0, resumedAt = nil,
     totalEncounters = 0, speciesCounts = {}, speciesOrder = {},
     -- HUD: size, the tap targets the last drawn frame published, and which
     -- pointer (if any) is currently down on one of them
     hudMode = "normal", hitAreas = nil, grabbedId = nil, grabbedArea = nil,
     pipAspect = GB_ASPECT,
-    -- the --speed / POKEPORT_SPEED run argument we pushed down to the cap,
-    -- kept so hunting off hands the player's own value back
-    speedStash = nil, speedCapped = nil,
+    -- what GAME SPEED (and the --speed / POKEPORT_SPEED run argument) were
+    -- before the cap pushed them down, kept so hunting off hands the
+    -- player's own values back
+    optionStash = nil, optionCapped = nil,
+    overrideStash = nil, overrideCapped = nil,
   }
 
   local function stopWalking()
@@ -305,9 +311,13 @@ return function(mod)
     return rows
   end
 
+  -- The tag doubles as the answer to "why isn't the clock moving?": IDLE is
+  -- AUTO HUNT on but the hunt not running -- a menu is up, the game is
+  -- loading, or it cannot walk -- which is exactly when the clock parks.
   local function statusText()
     if state.shinyUp then return "SHINY!" end
-    return mod.options:get("enabled") and "HUNT ON" or "HUNT PAUSED"
+    if not mod.options:get("enabled") then return "HUNT PAUSED" end
+    return state.wasRunning and "HUNT ON" or "HUNT IDLE"
   end
 
   -- Where the game sits once the HUD owns the window.  Pure geometry off the
@@ -613,8 +623,17 @@ return function(mod)
   -- so holding it down here is all it takes: the GAME SPEED row, the "1"
   -- hotkey and the shoulder buttons all still cycle, they just cannot leave
   -- the value above the cap for longer than a tick.  The --speed /
-  -- POKEPORT_SPEED run argument wins over the option, so it gets pushed down
-  -- with it -- and handed back untouched the moment hunting stops.
+  -- POKEPORT_SPEED run argument wins over the option, so it is pushed down
+  -- with it.
+  --
+  -- The cap lasts exactly as long as AUTO HUNT does.  Both values are
+  -- stashed on the way down and handed back the moment hunting stops, so
+  -- turning the hunt off leaves the game at the speed the player chose --
+  -- this mod is not allowed to quietly keep a setting it lowered.  The stash
+  -- is refreshed on every clamp, so what comes back is the last speed they
+  -- actually asked for, and it is only restored if the live value is still
+  -- the one we imposed: if anything else moved it in the meantime, that
+  -- newer choice wins and we drop ours.
   local function speedCapValue()
     local n = tonumber(mod.options:get("speed_cap"))
     if not n or n < 1 then return MAX_SPEED_CAP end
@@ -626,35 +645,66 @@ return function(mod)
     if hunting then
       local cap = speedCapValue()
       if opts and (tonumber(opts.speed) or 1) > cap then
+        state.optionStash = opts.speed
+        state.optionCapped = cap
         opts.speed = cap
         if game.writeOptions then pcall(game.writeOptions, game) end
       end
       local override = tonumber(game and game.speedOverride)
       if override and override > cap then
-        if state.speedStash == nil then state.speedStash = game.speedOverride end
-        state.speedCapped = cap
+        state.overrideStash = game.speedOverride
+        state.overrideCapped = cap
         game.speedOverride = cap
       end
-    elseif state.speedStash ~= nil then
-      -- only give it back if nothing else has changed it since we capped it
-      if game and tonumber(game.speedOverride) == state.speedCapped then
-        game.speedOverride = state.speedStash
-      end
-      state.speedStash, state.speedCapped = nil, nil
+      return
     end
+
+    if state.optionStash ~= nil then
+      if opts and tonumber(opts.speed) == state.optionCapped then
+        opts.speed = state.optionStash
+        if game.writeOptions then pcall(game.writeOptions, game) end
+      end
+      state.optionStash, state.optionCapped = nil, nil
+    end
+    if state.overrideStash ~= nil then
+      if game and tonumber(game.speedOverride) == state.overrideCapped then
+        game.speedOverride = state.overrideStash
+      end
+      state.overrideStash, state.overrideCapped = nil, nil
+    end
+  end
+
+  -- Is the hunt actually running right now?  This is what the clock counts,
+  -- and it is deliberately narrower than "AUTO HUNT is on":
+  --
+  --   * a shiny sitting on screen parks it -- the number you want is how
+  --     long the hunt took, not how long the phone sat there afterwards
+  --   * our own flee counts, even though a battle screen is up: that is one
+  --     turn of the hunt's own cycle
+  --   * anything else stacked over the overworld -- a menu, a dialog, the
+  --     title screen, a load, a trainer fight -- is not hunting
+  --   * and on the overworld it only counts once we are genuinely walking,
+  --     which is what keeps a boot straight into a hunting save from
+  --     counting the loading screen
+  local function huntIsRunning(hunting)
+    if not hunting or state.shinyUp then return false end
+    if state.fleeing then return true end
+    if state.blockingLayers > 0 then return false end
+    return state.token ~= nil or state.awaitingConfirm
   end
 
   mod.hooks:wrap("input.step", function(next, game, dt)
     local hunting = mod.options:get("enabled")
     applySpeedCap(game, hunting)
 
-    if hunting and not state.wasHunting then
+    local running = huntIsRunning(hunting)
+    if running and not state.wasRunning then
       state.resumedAt = nowReal()
-    elseif not hunting and state.wasHunting then
+    elseif not running and state.wasRunning then
       state.elapsedBase = state.elapsedBase + (nowReal() - (state.resumedAt or nowReal()))
       state.resumedAt = nil
     end
-    state.wasHunting = hunting
+    state.wasRunning = running
 
     if hunting and state.fleeing then
       -- one fresh wasPressed edge per tick -- mashing, not holding, since

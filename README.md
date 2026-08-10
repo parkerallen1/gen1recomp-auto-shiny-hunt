@@ -36,25 +36,40 @@ wild Pokemon actually ends up with, however they got there.
 
 ## Speed cap
 
-**SPEED CAP** holds GAME SPEED down while AUTO HUNT is on. It defaults to
-**4X**, which is also the highest it goes -- the option only offers
-*tighter* caps (3X, 2X, 1X), never a looser one. Past 4X an unattended hunt
-stops being the game running fast and turns into a counter being spun.
+**SPEED CAP** holds GAME SPEED down **while AUTO HUNT is on, and only while
+it is on**. It defaults to **10X**, which is also the highest it goes -- the
+option only offers *tighter* caps (4X, 3X, 2X, 1X), never a looser one.
 
 Nothing is taken away: the GAME SPEED options row, the `1` hotkey and the
 shoulder buttons all still cycle, they just can't leave the value above the
-cap for longer than a tick. Turn AUTO HUNT off and the game is yours again
-at whatever speed you like -- and if you launched with `--speed` /
-`POKEPORT_SPEED`, that exact value is handed back untouched.
+cap for longer than a tick. Turn AUTO HUNT off and whatever you had set
+comes straight back -- including a `--speed` / `POKEPORT_SPEED` launch
+argument, handed back untouched. If you climb the ladder again mid-hunt, the
+speed that comes back is the last one you asked for; if anything else moves
+it while the cap is holding it down, that newer choice wins and the mod
+drops its own.
 
 ## HUD
 
-**SHOW HUD** (on by default, independent of AUTO HUNT) draws real
-wall-clock elapsed time (not game time -- unaffected by the GAME SPEED
-setting), the total wild encounter count, and a per-species count sorted
-highest first. It keeps counting through a pause (e.g. while AUTO HUNT is
-off so you can catch a shiny) and only resets when the game restarts or the
-mod reloads.
+**SHOW HUD** (on by default, independent of AUTO HUNT) draws the elapsed
+hunting clock, the total wild encounter count, and a per-species count
+sorted highest first. The counts keep their totals through a pause (e.g.
+while AUTO HUNT is off so you can catch a shiny) and only reset when the
+game restarts or the mod reloads.
+
+The clock is real wall-clock time, not game time -- the GAME SPEED setting
+does not stretch it -- and it counts **time spent hunting**, not time since
+you switched the mod on. It runs while the shuffle is walking and through
+the mod's own flees, and parks whenever the hunt isn't actually happening:
+
+- AUTO HUNT off (tag reads `HUNT PAUSED`)
+- a menu, a dialog, the title screen or a load on top of the overworld, or
+  anywhere the shuffle can't walk (tag reads `HUNT IDLE`)
+- a shiny sitting on screen (tag reads `SHINY!`) -- so the number you pick
+  the phone up to is how long the hunt took, not how long it then waited
+
+The tag next to the clock always says which of those it is, so a clock that
+isn't moving explains itself.
 
 It comes in three sizes, and the chips it draws on itself switch between
 them with a tap (or a mouse click on desktop):
@@ -127,8 +142,9 @@ with no setup. What it has actually been read against:
 | project | version | notes |
 | --- | --- | --- |
 | Gen1Recomp (engine) | v0.1.75 | `input.pointer` needs >= v0.1.69 -- that's the manifest floor |
-| Dramatic Shape Voxel Mod | v1.8.1 | no shared hooks; its shinies are detected (see below) |
-| Shiny Pokemon (masterwebx) | v1.0.8 | its shinies are detected; see the note on running both |
+| Dramaless Shape (`artyrambles/DRAMALESS_SHAPE`) | v1.6.4 | no shared hooks; **no shinies of its own** (see below) |
+| Dramatic Shape Voxel Mod | v1.8.1 | upstream repo is gone as of 2026-08-10; checked while it was up |
+| Shiny Pokemon (masterwebx) | v1.0.8 | its shinies are detected with no setup |
 | Wilds of Kanto | v1.11.1 | **leave RANDOM ENC on** (see below) |
 | Gen1 Modern UI | v0.8.3 | wraps the same three HUD hooks at priority 100 and defers correctly |
 
@@ -138,20 +154,22 @@ when one of them releases something new.
 
 ### Shiny sources
 
-Since **Dramatic Shape v1.8.1** the voxel mod rolls its own shinies, and the
-standalone **Shiny Pokemon** mod has always done the same. Both write the
-verdict into the Pokemon's DVs, which is exactly what this mod reads -- so
-one, the other, both or neither all work here without a setting.
+Whatever makes a wild Pokemon shiny, this mod reads the DVs, so it needs no
+setup either way. What matters is that **exactly one** mod is rolling them.
 
-Running **both** at once is the thing to avoid: they each wrap
-`Pokemon.new`, and Dramatic Shape's miss branch actively *un-shinies* a mon,
-so one mod can cancel the other's shiny and the real rate is neither dial.
-Pick one:
+- **Dramaless Shape** (the `artyrambles/DRAMALESS_SHAPE` fork, v1.6.x) has
+  **no shiny feature** -- it forked before upstream added one. With this
+  fork, the standalone **Shiny Pokemon** mod is your shiny source and should
+  stay on. Nothing conflicts: the fork never touches `Pokemon.new`.
+- **Dramatic Shape v1.8.1** (upstream, now unavailable) did roll its own.
+  If you are running a copy of it, do not also run Shiny Pokemon's roll:
+  both wrap `Pokemon.new`, and v1.8.1's miss branch actively *un-shinies* a
+  mon, so one can cancel the other and the real rate is neither dial. Turn
+  Shiny Pokemon off, or set its **SHINY RATE** to **OFF** and keep
+  **SHINY COLORS** on for the overworld colouring v1.8.1 does not do.
 
-- Turn **Shiny Pokemon** off, or
-- keep it for its overworld sprite colouring (Dramatic Shape's shiny art is
-  battle-side only) and set its **SHINY RATE** to **OFF**, which leaves it
-  reading DVs and colouring without rolling anything of its own.
+Note that Shiny Pokemon's default rate is **1/4096**, not Gen 2's 1/8192 --
+set it to `1/8192 (Gen 2)` if you want the classic pace.
 
 ### Wilds of Kanto
 
@@ -161,13 +179,14 @@ roll off entirely -- and the classic roll is the only thing this mod's
 shuffle can trigger. The hunt would walk in place for hours and never find a
 single encounter.
 
-### Dramatic Shape camera rungs
+### Voxel camera rungs
 
-Hunt on the orbit/diorama rungs (or in 2D), not the **1ST**/**3RD** person
-ones. Those replace grid walking with continuous movement rotated by the
-camera's yaw, so a held UP is "forward from where you happen to be looking"
-rather than one tile north -- the shuffle can slide off its two tiles, and
-turning the camera changes what the walk directions mean mid-hunt.
+This applies to both the fork and upstream -- they share the code. Hunt on
+the orbit/diorama rungs (or in 2D), not the **1ST**/**3RD** person ones.
+Those replace grid walking with continuous movement rotated by the camera's
+yaw, so a held UP is "forward from where you happen to be looking" rather
+than one tile north -- the shuffle can slide off its two tiles, and turning
+the camera changes what the walk directions mean mid-hunt.
 
 ## Layout
 

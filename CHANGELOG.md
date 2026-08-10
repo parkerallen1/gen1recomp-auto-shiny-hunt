@@ -3,6 +3,41 @@
 Format: [keep a changelog](https://keepachangelog.com/en/1.1.0/).
 Version headings match `manifest.json`'s `version`.
 
+## 0.5.0
+
+### Changed
+
+- `SPEED CAP` now tops out at **10X** (the engine's next ladder rung above
+  4X) and defaults to it. The tighter rungs -- 4X, 3X, 2X, 1X -- are still
+  there; there is still no way to set it looser than the ceiling.
+- The cap now lasts exactly as long as `AUTO HUNT` does. It already only
+  *applied* while hunting, but it left GAME SPEED where it had pushed it:
+  turning the hunt off now hands back the speed you had set, the same way a
+  `--speed` / `POKEPORT_SPEED` launch argument was already handed back. If
+  you climb the ladder again mid-hunt it is the most recent choice that
+  comes back, and a value something else changed while the cap held it down
+  is left alone.
+- The HUD clock now counts **time spent hunting** rather than time since
+  AUTO HUNT was switched on. It parks while a menu, a dialog, the title
+  screen or a load is up, before the shuffle has started walking (so a boot
+  straight into a hunting save no longer counts the loading screen), and
+  while a shiny is sitting on screen -- so the number you pick the phone up
+  to is how long the hunt actually took. The mod's own flees still count;
+  they are part of the cycle.
+- The HUD's status tag says which of those it is: `HUNT ON`, `HUNT IDLE`
+  (on, but the clock is parked), `HUNT PAUSED` or `SHINY!`, so a clock that
+  is not moving explains itself.
+
+### Compatibility
+
+- Verified against the `artyrambles/DRAMALESS_SHAPE` fork (v1.6.4), which is
+  where the voxel mod has moved: no shared hooks, and because it forked
+  before upstream's shiny work it has no shiny feature and never touches
+  `Pokemon.new` -- so the standalone Shiny Pokemon mod is the shiny source
+  alongside it, with nothing to turn off. The README's shiny-source and
+  camera-rung notes now cover both it and the upstream mod, whose repo
+  stopped resolving on 2026-08-10.
+
 ## 0.4.1
 
 ### Fixed

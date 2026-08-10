@@ -47,12 +47,22 @@ do
   local t = H.load()
   local cap
   for _, row in ipairs(t.schema) do if row.key == "speed_cap" then cap = row end end
-  ok(cap and cap.default == "4", "SPEED CAP defaults to 4X")
+  ok(cap and cap.default == "10", "SPEED CAP defaults to 10X")
   local highest = 0
   for _, choice in ipairs(cap.choices) do
     highest = math.max(highest, tonumber(choice[2]) or 0)
   end
-  ok(highest == 4, "no rung above 4X is offered (highest = " .. highest .. ")")
+  ok(highest == 10, "no rung above 10X is offered (highest = " .. highest .. ")")
+  -- every rung has to be a real engine GameSpeed level or the engine's clamp
+  -- would round our cap to something else the moment it read it
+  local LEVELS = { [1] = true, [2] = true, [3] = true, [4] = true, [10] = true,
+                   [20] = true, [30] = true, [50] = true, [75] = true,
+                   [100] = true, [200] = true }
+  local bad
+  for _, choice in ipairs(cap.choices) do
+    if not LEVELS[tonumber(choice[2])] then bad = choice[1] end
+  end
+  ok(not bad, "every rung is a real GameSpeed level" .. (bad and (" -- " .. bad) or ""))
 end
 
 -- ----------------------------------------------------------- speed cap --
@@ -64,26 +74,57 @@ do
 
   local g = H.game(200)
   t.step(g)
-  ok(g.save.options.speed == 4, "200X is pinned back to 4X while hunting")
+  ok(g.save.options.speed == 10, "200X is pinned back to 10X while hunting")
   ok(g.writes == 1, "the clamped value is written back")
   t.step(g)
   ok(g.writes == 1, "an already-capped speed is not rewritten every tick")
 
-  g = H.game(2)
+  -- the cap lasts exactly as long as the hunt: what the player had set has
+  -- to come back, or the mod has quietly kept a setting it lowered
+  t.options.enabled = false
   t.step(g)
-  ok(g.save.options.speed == 2, "a speed under the cap is left alone")
+  ok(g.save.options.speed == 200, "hunting off restores the player's GAME SPEED")
+  t.options.enabled = true
+
+  g = H.game(4)
+  t.step(g)
+  ok(g.save.options.speed == 4, "a speed under the cap is left alone")
+  t.options.enabled = false
+  t.step(g)
+  ok(g.save.options.speed == 4, "a speed never capped is not touched on release")
+  t.options.enabled = true
+
+  -- the last speed they actually asked for is what comes back
+  g = H.game(200)
+  t.step(g)
+  g.save.options.speed = 100
+  t.step(g)
+  ok(g.save.options.speed == 10, "a fresh climb is clamped again")
+  t.options.enabled = false
+  t.step(g)
+  ok(g.save.options.speed == 100, "the most recent choice is what is restored")
+  t.options.enabled = true
+
+  -- but a value somebody else moved while we held it down wins over ours
+  g = H.game(200)
+  t.step(g)
+  g.save.options.speed = 3
+  t.options.enabled = false
+  t.step(g)
+  ok(g.save.options.speed == 3, "a speed changed by someone else is not stomped")
+  t.options.enabled = true
 
   t.options.speed_cap = "2"
   g = H.game(4)
   t.step(g)
   ok(g.save.options.speed == 2, "a tighter cap is honoured")
-  t.options.speed_cap = "4"
+  t.options.speed_cap = "10"
 
   -- the --speed / POKEPORT_SPEED run argument wins over the saved option in
   -- Game:logicSpeed, so the cap has to reach it too -- and give it back
   g = H.game(1, 100)
   t.step(g)
-  ok(g.speedOverride == 4, "the run-argument override is capped as well")
+  ok(g.speedOverride == 10, "the run-argument override is capped as well")
   t.options.enabled = false
   t.step(g)
   ok(g.speedOverride == 100, "hunting off hands the player's override back")
@@ -164,6 +205,94 @@ do
   t.options.enabled = false
   ok(not started(H.COMMON_DVS, 4), "paused, a wild battle is not fled")
   t.emit("battle.ended", {})
+end
+
+-- ---------------------------------------------------------------- clock --
+
+section("clock only runs while the hunt does")
+do
+  local t = H.load()
+  local g = H.game(1)
+  local function elapsed()
+    return t.state.elapsedBase
+      + (t.state.resumedAt and (rec.clock - t.state.resumedAt) or 0)
+  end
+  local function tick(seconds)
+    rec.clock = rec.clock + (seconds or 1)
+    t.step(g)
+  end
+
+  rec.clock = 1000
+  t.options.enabled = false
+  tick(10)
+  ok(elapsed() == 0, "with AUTO HUNT off the clock does not start")
+
+  -- switched on, but the overworld has not been reached yet: this is the boot
+  -- and the loading screen, and it must not count
+  t.options.enabled = true
+  t.cell = nil
+  tick(30)
+  ok(elapsed() == 0, "the clock does not run before the hunt can walk")
+
+  -- on the overworld and walking. The first tick takes the hold; the clock
+  -- starts on the next one, once there is a hold to see.
+  t.cell = { x = 3, y = 4 }
+  tick(1)
+  tick(1)
+  local walking = elapsed()
+  tick(20)
+  ok(elapsed() >= walking + 20, "the clock runs while the shuffle is walking")
+
+  -- a menu on top: not hunting, so it parks
+  t.emit("screen.pushed", { state = { isOverworld = false } })
+  tick(1)
+  local parked = elapsed()
+  tick(600)
+  ok(elapsed() == parked, "ten minutes in a menu do not reach the clock")
+  t.emit("screen.popped", { state = { isOverworld = false } })
+
+  -- our own flee is part of the cycle, so a battle we are resolving counts
+  t.cell = { x = 3, y = 5 }
+  tick(1); tick(1)
+  t.emit("screen.pushed", { state = { isOverworld = false } })
+  t.emit("battle.started", H.wildEvent(H.COMMON_DVS, 2))
+  local fleeing = elapsed()
+  tick(3)
+  ok(elapsed() > fleeing, "the clock keeps running through our own flee")
+  t.emit("battle.ended", {})
+  t.emit("screen.popped", { state = { isOverworld = false } })
+
+  -- a shiny sitting on screen stops it: the number is time-to-shiny
+  t.cell = { x = 3, y = 6 }
+  tick(1); tick(1)
+  t.emit("screen.pushed", { state = { isOverworld = false } })
+  t.emit("battle.started", H.wildEvent(H.SHINY_DVS, 3))
+  tick(1)
+  local found = elapsed()
+  tick(3600)
+  ok(elapsed() == found, "an hour parked on a shiny does not reach the clock")
+
+  -- and the HUD says why it stopped
+  t.state.hudMode = "normal"
+  rec.reset()
+  t.hud(H.viewport(800, 600))
+  local tag
+  for _, p in ipairs(rec.prints) do
+    if p.text:match("^SHINY") or p.text:match("^HUNT") then tag = tag or p.text end
+  end
+  ok(tag == "SHINY!", "the HUD tag calls out the shiny (got " .. tostring(tag) .. ")")
+
+  t.emit("battle.ended", {})
+  t.emit("screen.popped", { state = { isOverworld = false } })
+  rec.reset()
+  t.emit("screen.pushed", { state = { isOverworld = false } })
+  tick(2)
+  t.hud(H.viewport(800, 600))
+  tag = nil
+  for _, p in ipairs(rec.prints) do
+    if p.text:match("^HUNT") then tag = tag or p.text end
+  end
+  ok(tag == "HUNT IDLE", "a parked clock reads as IDLE (got " .. tostring(tag) .. ")")
 end
 
 -- ----------------------------------------------------------------- HUD --
